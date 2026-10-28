@@ -1,0 +1,10 @@
+{
+  "retirementAge": 65,
+  "inflationRate": 0.046,
+  "eurRon": 5,
+  "suggestedReductionPct": 0.33,
+  "creditsPerRon": 1,
+  "demoBalanceRon": 5000,
+  "streakBonusCredits": 5,
+  "maxStreakBonusCredits": 25
+}

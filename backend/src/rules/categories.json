@@ -1,0 +1,10 @@
+{
+  "coffee": ["\\bstarbucks\\b", "\\b5\\s*to\\s*go\\b", "\\bto\\s*go\\b", "\\bcoffee\\b", "\\bcafenea\\b"],
+  "food_delivery": ["\\btazz\\b", "\\bglovo\\b", "\\bwolt\\b", "\\bbolt\\s*food\\b"],
+  "ride_hailing": ["\\buber\\b", "\\bbolt\\b"],
+  "groceries": ["\\bkaufland\\b", "\\blidl\\b", "\\bcarrefour\\b", "\\bmega\\s*image\\b", "\\bprofi\\b", "\\bauchan\\b"],
+  "subscriptions": ["\\bnetflix\\b", "\\bspotify\\b", "\\bhbo\\b", "\\byoutube\\b"],
+  "income": ["\\bsalariu\\b", "\\bsalary\\b", "\\bpayroll\\b"],
+  "transfer": ["\\btransfer\\b", "\\btransfer\\s+catre\\b", "\\bvirament\\b"],
+  "altele": []
+}

@@ -1,0 +1,33 @@
+[
+  {
+    "id": "fidelis",
+    "name": "Fidelis (simulat)",
+    "grossAnnual": 0.075,
+    "taxType": "exempt",
+    "taxRate": 0,
+    "source": "Ministerul Finanțelor / BVB; valoare orientativă pentru emisiuni RON din august 2026",
+    "asOf": "2026-08",
+    "verify": true
+  },
+  {
+    "id": "depozit",
+    "name": "Depozit bancar (simulat)",
+    "grossAnnual": 0.05,
+    "taxType": "interest",
+    "taxRate": 0.16,
+    "source": "Placeholder; rată de verificat pe fișa actuală a băncii",
+    "asOf": "2026-10",
+    "verify": true
+  },
+  {
+    "id": "pilon-iii",
+    "name": "Pilon III (simulat)",
+    "grossAnnual": 0.061,
+    "taxType": "gains_at_payout",
+    "taxRate": 0.1,
+    "deductionCapEur": 400,
+    "source": "APAPR; medie anuală simplificată pe 18 ani, cap de deducere neschimbat din 2009",
+    "asOf": "2026",
+    "verify": true
+  }
+]

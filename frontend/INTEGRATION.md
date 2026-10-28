@@ -7,6 +7,9 @@ Dashboard React/Tailwind la `/` și `/dashboard`, sold inițial 5000 RON, oraș 
 Acest proiect rulează **TanStack Start**, nu Next.js. Fișierele `app/dashboard/page.tsx`, `app/api/oasis/route.js`, `app/login/page.tsx` și middleware-ul NextAuth din document **nu pot fi copiate direct aici**. Contractul HTTP poate fi păstrat, dar echipa trebuie să adapteze backend-ul și autentificarea la TanStack sau să integreze componentele React în proiectul Next.js comun. Nu sunt implementate login, protecție de rute sau endpoint AI în acest frontend.
 
 ## Membrul 2 — AI
+- Importul de extras este în `POST /api/statements/import` (multipart field `file`) și `POST /api/statements/demo`; `/api/insights` întoarce agregatele ultimelor 28 de zile, iar `POST /api/quests/generate` creează un quest din habit-ul calculat în backend.
+- CSV-ul original este procesat în memorie și nu este persistat. Sunt salvate doar data, merchant-ul normalizat, categoria și suma semnată. PDF-ul este best-effort și poate necesita retry cu CSV.
+- În development, clientul API folosește `http://localhost:8000`; configurați `VITE_API_BASE_URL` pentru alt host/origin.
 - Frontend-ul face `POST /api/oasis`, `Content-Type: application/json`, `Accept: application/json`, body `{}`. Extrasul fictiv este definit de backend, nu de frontend.
 - Returnați HTTP 200 cu un obiect JSON direct (nu text markdown și nu `{ data: ... }`):
 ```json
@@ -23,7 +26,8 @@ Acest proiect rulează **TanStack Start**, nu Next.js. Fișierele `app/dashboard
 - Pentru un backend separat, configurați `VITE_OASIS_API_URL` cu URL-ul HTTPS complet înainte de publicare. Nu este configurat un server implicit localhost.
 - Dacă folosiți altă origine, permiteți originea exactă a frontend-ului, POST/OPTIONS, Content-Type/Accept și credentials prin CORS; nu folosiți `*` cu cookies. Cookies cross-site necesită politica SameSite/Secure potrivită. Aceeași origine este mai simplă.
 - În TanStack, prefixul de rute externe este `/api/public/*`; colegul care implementează handler-ul trebuie să verifice apelantul și poate seta frontend-ul către acel URL prin `VITE_OASIS_API_URL`. Cerințele de autentificare nu trebuie ocolite.
-- Timeout 12 secunde, răspuns invalid, HTTP non-200 sau server absent: UI folosește contractul demo și afișează explicit acest lucru. 401/403 indică necesitatea autentificării, fără login simulat.
+- În development, URL-ul implicit este `http://localhost:8000/api/oasis`; suprascrieți-l cu `VITE_OASIS_API_URL`. În producție, configurați URL-ul HTTPS al backendului sau ruta same-origin.
+- Timeout 12 secunde, răspuns invalid, HTTP non-200 sau server absent: UI afișează eroare și buton de retry; nu prezintă un quest fictiv ca rezultat AI. `DEMO_QUEST` este folosit doar în testele reducerului.
 
 ## Membrul 3 — autentificare
 - `/dashboard` există pentru redirectul de după login. Protejați atât `/`, cât și `/dashboard`, și verificați sesiunea și în API.
