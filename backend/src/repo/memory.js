@@ -8,6 +8,7 @@ const DEMO_USERS = [
 const clone = (value) => structuredClone(value);
 
 function createMemoryRepository() {
+  let transactionTail = Promise.resolve();
   const state = {
     users: new Map(DEMO_USERS.map((user) => [user.id, clone(user)])),
     statements: [],
@@ -46,7 +47,7 @@ function createMemoryRepository() {
     }
   }
 
-  return {
+  const repository = {
     async getUser(userId) {
       return clone(state.users.get(userId) || null);
     },
@@ -124,6 +125,11 @@ function createMemoryRepository() {
     async latestQuest(userId) {
       const quests = state.quests.filter((entry) => entry.userId === userId);
       return clone(quests.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] || null);
+    },
+
+    async countAcceptedQuests(userId) {
+      requireUser(userId);
+      return state.quests.filter((entry) => entry.userId === userId && entry.status === "accepted").length;
     },
 
     async addLedgerEntry(entry) {
@@ -242,6 +248,23 @@ function createMemoryRepository() {
       return Boolean(muted);
     },
   };
+
+  repository.transaction = async (operation) => {
+    const result = transactionTail.then(async () => {
+      const snapshot = structuredClone(state);
+      try {
+        return await operation(repository);
+      } catch (error) {
+        for (const key of Object.keys(state)) delete state[key];
+        Object.assign(state, snapshot);
+        throw error;
+      }
+    });
+    transactionTail = result.catch(() => undefined);
+    return result;
+  };
+
+  return repository;
 }
 
 module.exports = { createMemoryRepository, DEMO_USERS };

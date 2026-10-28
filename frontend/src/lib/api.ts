@@ -24,6 +24,38 @@ export interface InsightsData {
   habit: DetectedHabit | null;
 }
 
+export interface WalletData {
+  userId: string;
+  balances: { RON_SIM: number; CREDITS: number };
+  investedRon: number;
+  streak: number;
+  inventory: Array<{ id: string; itemId: string; name: string; type: string; placedPlot: string | null }>;
+}
+
+export interface ProjectionValue {
+  destinationId: string;
+  name: string;
+  grossAnnual: number;
+  netAnnualRate: number;
+  nominalRon: number;
+  realRon: number;
+  totalContributedRon: number;
+  deductionBenefitRon: number;
+  yearlySeries: Array<{ year: number; nominalRon: number; realRon: number; contributedRon: number }>;
+  source: string;
+  asOf: string;
+  verify: boolean;
+  estimateDisclaimer: string;
+}
+
+export interface QuestAcceptance {
+  alreadyAccepted: boolean;
+  quest: Record<string, unknown>;
+  balances: { RON_SIM: number; CREDITS: number };
+  investedRon: number;
+  streak: number;
+}
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ||
   (import.meta.env.DEV ? "http://localhost:8000" : "");
 
@@ -69,6 +101,22 @@ export function uploadStatement(file: File, demoUserId: string): Promise<{ state
 
 export function generateQuest(demoUserId: string, signal?: AbortSignal): Promise<OasisQuest> {
   return requestJson("/api/quests/generate", demoUserId, { method: "POST", body: "{}", signal });
+}
+
+export function getWallet(demoUserId: string): Promise<WalletData> {
+  return requestJson("/api/wallet", demoUserId, { method: "GET" });
+}
+
+export function acceptQuest(questId: string, destinationId: string, demoUserId: string): Promise<QuestAcceptance> {
+  return requestJson(`/api/quests/${encodeURIComponent(questId)}/accept`, demoUserId, {
+    method: "POST",
+    body: JSON.stringify({ destinationId }),
+  });
+}
+
+export function getProjections(weeklySaving: number, age: number, demoUserId: string): Promise<{ projections: ProjectionValue[] }> {
+  const query = new URLSearchParams({ weeklySaving: String(weeklySaving), age: String(age) });
+  return requestJson(`/api/projection?${query}`, demoUserId, { method: "GET" });
 }
 
 export function deleteUserData(demoUserId: string): Promise<{ deleted: boolean }> {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getInsights, importDemoStatement, uploadStatement } from "@/lib/api";
+import { acceptQuest, getInsights, getProjections, importDemoStatement, uploadStatement } from "@/lib/api";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -35,5 +35,20 @@ describe("Phase 1 API client", () => {
     expect(fetchMock.mock.calls[0][0]).toBe("http://localhost:8000/api/statements/demo");
     expect(fetchMock.mock.calls[1][0]).toBe("http://localhost:8000/api/statements/import");
     expect(fetchMock.mock.calls[1][1]?.body).toBeInstanceOf(FormData);
+  });
+
+  it("sends quest acceptance and projection requests with the selected user", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ alreadyAccepted: false }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ projections: [] }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await acceptQuest("quest-1", "fidelis", "demo-radu");
+    await getProjections(40, 24, "demo-radu");
+
+    expect(fetchMock.mock.calls[0][0]).toBe("http://localhost:8000/api/quests/quest-1/accept");
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ destinationId: "fidelis" });
+    expect(new Headers(fetchMock.mock.calls[0][1].headers).get("x-demo-user")).toBe("demo-radu");
+    expect(fetchMock.mock.calls[1][0]).toBe("http://localhost:8000/api/projection?weeklySaving=40&age=24");
   });
 });

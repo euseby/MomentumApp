@@ -31,6 +31,21 @@ describe("Oasis simulation", () => {
   it("prevents investing more than the available balance", () => {
     expect(cityReducer(INITIAL_CITY, { type: "accept", quest: { ...DEMO_QUEST, amountToSave: 5001 } })).toEqual(INITIAL_CITY);
   });
+  it("hydrates wallet and inventory state from the backend after reload", () => {
+    const synced = cityReducer({ ...INITIAL_CITY, isRuined: true }, {
+      type: "syncWallet",
+      simulatedBalance: 4960,
+      investedRon: 40,
+      inventory: [{ name: "Cafenea" }],
+      accepted: true,
+    });
+    expect(synced.simulatedBalance).toBe(4960);
+    expect(synced.saved).toBe(40);
+    expect(synced.cityLevel).toBe(2);
+    expect(synced.rewards).toEqual(["Cafenea"]);
+    expect(synced.isRuined).toBe(false);
+    expect(synced.accepted).toBe(true);
+  });
   it("accepts backend JSON without optional rewardType", () => {
     const { rewardType: _, ...quest } = DEMO_QUEST;
     expect(isOasisQuest(quest)).toBe(true);

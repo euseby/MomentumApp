@@ -6,6 +6,8 @@ const { repository } = require("./src/repo");
 const { createCoreRouter } = require("./src/routes/core");
 const { createQuestsRouter } = require("./src/routes/quests");
 const { createStatementsRouter } = require("./src/routes/statements");
+const { createQuestActionsRouter } = require("./src/routes/quest-actions");
+const { createProjectionRouter } = require("./src/routes/projection");
 const llm = require("./src/services/llm");
 const { getCurrentUser } = require("./src/services/current-user");
 const { addLedgerEntry, getWalletBalances } = require("./src/services/ledger");
@@ -25,7 +27,8 @@ function createApp(llmClient = openai, activeRepository = repository) {
   const app = express();
   app.use(cors({
     origin(origin, callback) {
-      callback(null, !origin || CORS_ORIGINS.includes(origin));
+      const localDevelopmentOrigin = origin && /^https?:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin);
+      callback(null, !origin || CORS_ORIGINS.includes(origin) || localDevelopmentOrigin);
     },
     credentials: true,
     methods: ["GET", "POST", "OPTIONS"],
@@ -38,6 +41,8 @@ function createApp(llmClient = openai, activeRepository = repository) {
   app.use(createCoreRouter(activeRepository, MODEL_NAME, Boolean(llmClient)));
   app.use(createStatementsRouter(activeRepository));
   app.use(createQuestsRouter(llmClient, activeRepository));
+  app.use(createQuestActionsRouter(activeRepository));
+  app.use(createProjectionRouter(activeRepository));
   return app;
 }
 

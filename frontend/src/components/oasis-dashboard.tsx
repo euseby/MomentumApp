@@ -3,9 +3,10 @@ import { ArrowDownLeft, ArrowUpRight, Check, ChevronRight, Coffee, Coins, Leaf, 
 import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/components/ui/alert-dialog";
 import { cityReducer, INITIAL_CITY, rewardSymbol, type OasisQuest } from "@/lib/oasis";
-import { generateQuest, getInsights, importDemoStatement, uploadStatement, type InsightsData } from "@/lib/api";
+import { acceptQuest, generateQuest, getInsights, getProjections, getWallet, importDemoStatement, uploadStatement, type InsightsData, type ProjectionValue, type WalletData } from "@/lib/api";
 import { StatementUpload } from "@/components/statement-upload";
 import { InsightsPanel } from "@/components/insights-panel";
+import { ProjectionChart } from "@/components/projection-chart";
 import island from "@/assets/oasis-island.jpg";
 
 const ron = (value: number) => new Intl.NumberFormat("ro-RO", { maximumFractionDigits: 2 }).format(value) + " RON";
@@ -15,8 +16,12 @@ export function OasisDashboard() {
   const [demoUserId, setDemoUserId] = useState("demo-ioana");
   const [questData, setQuestData] = useState<OasisQuest | null>(null);
   const [insights, setInsights] = useState<InsightsData | null>(null);
+  const [wallet, setWallet] = useState<WalletData | null>(null);
+  const [projections, setProjections] = useState<ProjectionValue[]>([]);
+  const [destinationId, setDestinationId] = useState("fidelis");
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
+  const [accepting, setAccepting] = useState(false);
   const [apiError, setApiError] = useState("");
   const [withdrawOpen, setWithdrawOpen] = useState(false);
   const request = useRef<AbortController | null>(null);
@@ -26,18 +31,32 @@ export function OasisDashboard() {
     request.current = controller;
     setLoading(true);
     try {
-      const nextInsights = await getInsights(demoUserId, controller.signal);
+      const [nextInsights, nextWallet] = await Promise.all([
+        getInsights(demoUserId, controller.signal),
+        getWallet(demoUserId),
+      ]);
       if (controller.signal.aborted) return;
       setInsights(nextInsights);
+      setWallet(nextWallet);
+      dispatch({
+        type: "syncWallet",
+        simulatedBalance: nextWallet.balances.RON_SIM,
+        investedRon: nextWallet.investedRon,
+        inventory: nextWallet.inventory,
+      });
       dispatch({ type: "newQuest" });
       if (!nextInsights.habit) {
         setQuestData(null);
+        setProjections([]);
         setApiError("");
         return;
       }
       const nextQuest = await generateQuest(demoUserId, controller.signal);
       if (controller.signal.aborted) return;
       setQuestData(nextQuest);
+      const projectionResult = await getProjections(nextQuest.amountToSave, 24, demoUserId);
+      if (controller.signal.aborted) return;
+      setProjections(projectionResult.projections);
       setApiError("");
     } catch (error) {
       if (controller.signal.aborted) return;
@@ -73,6 +92,31 @@ export function OasisDashboard() {
       setImporting(false);
     }
   };
+
+  const handleAcceptQuest = async () => {
+    if (!questData?.id) {
+      setApiError("Misiunea nu are un identificator valid. Generează din nou quest-ul.");
+      return;
+    }
+    setAccepting(true);
+    setApiError("");
+    try {
+      await acceptQuest(questData.id, destinationId, demoUserId);
+      const nextWallet = await getWallet(demoUserId);
+      setWallet(nextWallet);
+      dispatch({
+        type: "syncWallet",
+        simulatedBalance: nextWallet.balances.RON_SIM,
+        investedRon: nextWallet.investedRon,
+        inventory: nextWallet.inventory,
+        accepted: true,
+      });
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "Nu am putut accepta misiunea.");
+    } finally {
+      setAccepting(false);
+    }
+  };
   const latestReward = city.rewards.at(-1);
   const cityName = city.isRuined ? "Oraș Abandonat" : city.cityLevel === 1 ? "Cort pe plajă" : latestReward || "Oaza ta";
   const insufficient = questData ? questData.amountToSave > city.simulatedBalance : false;
@@ -94,6 +138,8 @@ export function OasisDashboard() {
                     dispatch({ type: "reset" });
                     setQuestData(null);
                     setInsights(null);
+                    setWallet(null);
+                    setProjections([]);
                     setApiError("");
                     setDemoUserId(event.target.value);
                   }}
@@ -112,14 +158,17 @@ export function OasisDashboard() {
           <div><p className="mb-2 text-xs font-semibold uppercase text-neon">UN PAS MIC. UN VIITOR MAI MARE.</p><h1 className="text-3xl font-extrabold sm:text-4xl">Oaza ta, în creștere.</h1><p className="mt-2 text-sm text-muted-foreground">Mai puține cheltuieli impulsive. Mai mult loc pentru visurile tale.</p></div>
           <span className="flex items-center gap-2 text-sm text-muted-foreground"><ShieldCheck className="size-4 text-primary" />Fără bani reali transferați</span>
         </div>
-        <section aria-label="Solduri" className="mb-7 grid grid-cols-2 gap-4 border-y border-border py-5 sm:grid-cols-3">
+        <section aria-label="Solduri simulate" className="mb-7 grid grid-cols-2 gap-4 border-y border-border py-5 sm:grid-cols-5">
           <div><p className="flex items-center gap-2 text-xs text-muted-foreground"><Wallet className="size-4" />Sold disponibil</p><p data-testid="balance" className="mt-2 text-xl font-extrabold tabular-nums sm:text-3xl">{ron(city.simulatedBalance)}</p></div>
           <div><p className="flex items-center gap-2 text-xs text-muted-foreground"><ArrowUpRight className="size-4 text-primary" />Economii simulate</p><p data-testid="saved" className="mt-2 text-xl font-extrabold tabular-nums text-primary sm:text-3xl">{ron(city.saved)}</p></div>
           <div className="col-span-2 border-t border-border pt-4 sm:col-span-1 sm:border-t-0 sm:pt-0"><p className="flex items-center gap-2 text-xs text-muted-foreground"><Sparkles className="size-4 text-neon" />Nivelul orașului</p><p data-testid="level" className="mt-2 text-xl font-extrabold sm:text-3xl">{String(city.cityLevel).padStart(2, "0")}<span className="ml-3 text-xs font-medium text-muted-foreground">{city.isRuined ? "Abandonat" : city.cityLevel === 1 ? "Început de poveste" : "În plină dezvoltare"}</span></p></div>
+          <div className="border-t border-border pt-4 sm:border-t-0 sm:pt-0"><p className="flex items-center gap-2 text-xs text-muted-foreground"><Coins className="size-4 text-neon" />Credite</p><p className="mt-2 text-xl font-extrabold tabular-nums sm:text-3xl">{wallet?.balances.CREDITS ?? 0}</p></div>
+          <div className="border-t border-border pt-4 sm:border-t-0 sm:pt-0"><p className="flex items-center gap-2 text-xs text-muted-foreground"><Sparkles className="size-4 text-neon" />Streak</p><p className="mt-2 text-xl font-extrabold tabular-nums sm:text-3xl">{wallet?.streak ?? 0}</p></div>
         </section>
         <StatementUpload busy={loading || importing} onDemo={() => void loadDemoStatement()} onUpload={(file) => void handleStatementUpload(file)} />
         {apiError && <p role="alert" className="mb-5 text-sm text-destructive">{apiError}</p>}
         <InsightsPanel insights={insights} loading={loading || importing} />
+        <ProjectionChart projections={projections} loading={loading} />
         <div className="grid items-start gap-7 lg:grid-cols-[1.4fr_1fr]">
           <section aria-label="Orașul tău" className="min-w-0">
             <div className="mb-3 flex items-center justify-between"><h2 className="text-lg font-bold">Insula mea</h2><span className={`flex items-center gap-1.5 text-xs ${city.isRuined ? "text-destructive" : "text-primary"}`}><span className={`size-1.5 rounded-full ${city.isRuined ? "bg-destructive" : "bg-primary"}`} />{city.isRuined ? "Abandonată" : "Înfloritoare"}</span></div>
@@ -145,7 +194,12 @@ export function OasisDashboard() {
                 <div className="mt-5 border-l-2 border-neon pl-4"><p className="mb-2 flex items-center gap-2 text-xs font-semibold text-neon"><Coffee className="size-3.5" />CE AM OBSERVAT</p><p className="text-sm leading-relaxed text-muted-foreground">{questData.analysisMessage}</p></div>
                 <p className="mt-5 text-sm leading-relaxed">{questData.proposalMessage}</p>
                 <div className="my-6 flex items-center gap-4 border-y border-border py-4"><span aria-hidden className="text-4xl">{rewardSymbol(questData.virtualReward, questData.rewardType)}</span><div><p className="text-xs text-muted-foreground">Recompensa ta</p><p className="mt-1 font-bold">{questData.virtualReward}</p></div><span className="ml-auto text-primary"><Sparkles className="size-5" /></span></div>
-                <div aria-live="polite">{city.accepted ? <div className="flex items-start gap-2 rounded-md bg-primary/10 p-3 text-sm text-primary"><Check className="size-5 shrink-0" /><p><b>Provocare acceptată!</b><br />{questData.virtualReward} e pe insula ta.</p></div> : <Button onClick={() => dispatch({ type: "accept", quest: questData })} disabled={loading || insufficient} className="h-auto min-h-14 w-full whitespace-normal px-4 py-3 text-sm font-bold glow-emerald"><Coins className="size-5" /><span>Acceptă Provocarea<br /><span className="font-medium">(Investește {ron(questData.amountToSave)})</span></span><ChevronRight className="ml-auto" /></Button>}</div>
+                {!city.accepted && <label className="mb-3 block text-xs text-muted-foreground">Instrument simulat
+                  <select value={destinationId} onChange={(event) => setDestinationId(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                    <option value="fidelis">Fidelis</option><option value="depozit">Depozit bancar</option><option value="pilon-iii">Pilon III</option>
+                  </select>
+                </label>}
+                <div aria-live="polite">{city.accepted ? <div className="flex items-start gap-2 rounded-md bg-primary/10 p-3 text-sm text-primary"><Check className="size-5 shrink-0" /><p><b>Provocare acceptată!</b><br />{questData.virtualReward} e pe insula ta.</p></div> : <Button onClick={() => void handleAcceptQuest()} disabled={loading || accepting || insufficient} className="h-auto min-h-14 w-full whitespace-normal px-4 py-3 text-sm font-bold glow-emerald"><Coins className="size-5" /><span>{accepting ? "Se confirmă…" : <>Acceptă Provocarea<br /><span className="font-medium">(Investește {ron(questData.amountToSave)})</span></>}</span><ChevronRight className="ml-auto" /></Button>}</div>
                 {city.accepted && <Button variant="outline" disabled={loading} className="mt-3 w-full" onClick={() => void loadDashboardData()}><RefreshCw />{loading ? "Se pregătește…" : "Cere o nouă provocare"}</Button>}
                 {insufficient && !city.accepted && <p role="alert" className="mt-3 text-sm text-destructive">Sold insuficient pentru această provocare.</p>}
                 <p className="mt-4 flex items-center justify-center gap-1.5 text-xs text-muted-foreground"><ShieldCheck className="size-3" />Acțiune simulată, fără transfer bancar</p>

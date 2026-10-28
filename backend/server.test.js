@@ -11,6 +11,7 @@ const {
 } = require("./server");
 const { createMemoryRepository } = require("./src/repo");
 const { parseStatementCsv, parseStatementText, normalizeMerchant, categorize } = require("./src/services/statements");
+const { projectAll, projectDestination, destinations } = require("./src/services/projection");
 
 const requestBody = {
   age: 24,
@@ -323,6 +324,9 @@ test("GET /api/wallet is scoped to either seeded demo user", async () => {
       assert.deepEqual(await response.json(), {
         userId,
         balances: { RON_SIM: 5000, CREDITS: 0 },
+        investedRon: 0,
+        streak: 0,
+        inventory: [],
       });
     }
   });
@@ -399,4 +403,93 @@ test("PDF text extraction accepts clear rows and rejects low-confidence text", (
   assert.equal(transactions[0].amountRon, -20);
   assert.equal(transactions[0].category, "coffee");
   assert.throws(() => parseStatementText("Text fără tranzacții clare"), /CSV/);
+});
+
+test("quest acceptance atomically invests, credits, rewards, and is idempotent", async () => {
+  const repo = createMemoryRepository();
+  const quest = await repo.createQuest("demo-ioana", {
+    weeklySavingRon: 40,
+    rewardId: "cafenea",
+    habit_json: { category: "cafea" },
+    llm_json: { questTitle: "Quest" },
+  });
+  const app = createApp(null, repo);
+
+  await withServer(app, async (baseUrl) => {
+    const accept = () => fetch(`${baseUrl}/api/quests/${quest.id}/accept`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-demo-user": "demo-ioana" },
+      body: JSON.stringify({ destinationId: "fidelis" }),
+    });
+    const first = await accept();
+    assert.equal(first.status, 200);
+    const accepted = await first.json();
+    assert.equal(accepted.balances.RON_SIM, 4960);
+    assert.equal(accepted.balances.CREDITS, 45);
+    assert.equal(accepted.inventoryItem.itemId, "cafenea");
+    assert.equal(accepted.quest.destinationId, "fidelis");
+    assert.equal(accepted.quest.streakBonusCredits, 5);
+
+    const retry = await accept();
+    assert.equal(retry.status, 200);
+    assert.equal((await retry.json()).alreadyAccepted, true);
+    assert.equal(await repo.getBalance("demo-ioana", "RON_SIM"), 4960);
+    assert.equal(await repo.getBalance("demo-ioana", "CREDITS"), 45);
+    assert.equal((await repo.listInvestments("demo-ioana")).length, 1);
+    assert.equal((await repo.listInventory("demo-ioana")).length, 1);
+  });
+});
+
+test("quest acceptance rolls back if simulated balance is insufficient", async () => {
+  const repo = createMemoryRepository();
+  const quest = await repo.createQuest("demo-ioana", { weeklySavingRon: 6000, rewardId: "cafenea" });
+  const app = createApp(null, repo);
+
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/quests/${quest.id}/accept`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-demo-user": "demo-ioana" },
+      body: JSON.stringify({ destinationId: "fidelis" }),
+    });
+    assert.equal(response.status, 409);
+    assert.equal(await repo.getBalance("demo-ioana", "RON_SIM"), 5000);
+    assert.equal(await repo.getBalance("demo-ioana", "CREDITS"), 0);
+    assert.equal((await repo.listInvestments("demo-ioana")).length, 0);
+    assert.equal((await repo.getQuest("demo-ioana", quest.id)).status, "offered");
+  });
+});
+
+test("destination projections handle zero rate, taxes, inflation, and the yearly series", () => {
+  const zeroRate = projectDestination({
+    weeklySaving: 10,
+    age: 64,
+    destination: { id: "zero", name: "Zero", grossAnnual: 0, taxType: "exempt", taxRate: 0 },
+    inflationRate: 0,
+  });
+  assert.equal(zeroRate.nominalRon, Math.round(10 * 52 / 12 * 12));
+  assert.equal(zeroRate.realRon, zeroRate.nominalRon);
+
+  const projections = projectAll({ weeklySaving: 40, age: 24 });
+  assert.equal(projections.length, 3);
+  assert.ok(projections.every((projection) => projection.realRon < projection.nominalRon));
+  assert.equal(projections[0].yearlySeries.length, 41);
+  assert.ok(projections.find((projection) => projection.destinationId === "pilon-iii").deductionBenefitRon > 0);
+  assert.ok(destinations.every((destination) => destination.verify === true && destination.source && destination.asOf));
+});
+
+test("GET /api/projection returns all destinations and filters a selected one", async () => {
+  const app = createApp(null, createMemoryRepository());
+  await withServer(app, async (baseUrl) => {
+    const headers = { "x-demo-user": "demo-ioana" };
+    const response = await fetch(`${baseUrl}/api/projection?weeklySaving=40&age=24`, { headers });
+    const body = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(body.projections.length, 3);
+    assert.equal(body.retirementAge, 65);
+    assert.match(body.projections[0].estimateDisclaimer, /nu garantată/);
+
+    const selected = await fetch(`${baseUrl}/api/projection?weeklySaving=40&age=24&destinationId=fidelis`, { headers });
+    assert.equal((await selected.json()).projections.length, 1);
+    assert.equal((await fetch(`${baseUrl}/api/projection?weeklySaving=40&age=24&destinationId=unknown`, { headers })).status, 400);
+  });
 });

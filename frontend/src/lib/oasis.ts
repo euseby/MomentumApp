@@ -1,4 +1,5 @@
 export interface OasisQuest {
+  id?: string;
   questTitle: string;
   analysisMessage: string;
   proposalMessage: string;
@@ -65,9 +66,23 @@ export interface CityState {
 export const INITIAL_CITY: CityState = {
   simulatedBalance: 5000, saved: 0, cityLevel: 1, isRuined: false, accepted: false, rewards: [],
 };
-export type CityAction = { type: "accept"; quest: OasisQuest } | { type: "withdraw" } | { type: "newQuest" } | { type: "reset" };
+export type CityAction =
+  | { type: "accept"; quest: OasisQuest }
+  | { type: "withdraw" }
+  | { type: "newQuest" }
+  | { type: "reset" }
+  | { type: "syncWallet"; simulatedBalance: number; investedRon: number; inventory: Array<{ name: string }>; accepted?: boolean };
 export function cityReducer(state: CityState, action: CityAction): CityState {
   if (action.type === "reset") return INITIAL_CITY;
+  if (action.type === "syncWallet") return {
+    ...state,
+    simulatedBalance: action.simulatedBalance,
+    saved: action.investedRon,
+    cityLevel: Math.max(1, action.inventory.length + 1),
+    rewards: action.inventory.map((item) => item.name),
+    isRuined: action.accepted ? false : state.isRuined,
+    accepted: action.accepted ?? false,
+  };
   if (action.type === "newQuest") return { ...state, accepted: false };
   if (action.type === "withdraw") return {
     ...INITIAL_CITY, simulatedBalance: Math.round((state.simulatedBalance + state.saved) * 100) / 100, isRuined: true,

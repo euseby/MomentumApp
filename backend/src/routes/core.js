@@ -22,7 +22,13 @@ function createCoreRouter(repository, modelName, llmConfigured) {
     try {
       const user = await getCurrentUser(req, repository);
       const balances = await getWalletBalances(repository, user.id);
-      return res.json({ userId: user.id, balances });
+      const [investments, streak, inventory] = await Promise.all([
+        repository.listInvestments(user.id),
+        repository.countAcceptedQuests(user.id),
+        repository.listInventory(user.id),
+      ]);
+      const investedRon = investments.reduce((sum, entry) => sum + entry.amountRon, 0);
+      return res.json({ userId: user.id, balances, investedRon, streak, inventory });
     } catch (error) {
       return res.status(error.status || 500).json({ error: error.status ? "Utilizator demo necunoscut." : "Nu am putut încărca soldul." });
     }
