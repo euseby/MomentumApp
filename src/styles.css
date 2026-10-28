@@ -142,3 +142,24 @@
     color: var(--color-foreground);
   }
 }
+
+:root {
+  --background: oklch(0.985 0.004 270);
+  --foreground: oklch(0.18 0.03 275);
+  --card: oklch(1 0 0);
+  --primary: oklch(0.55 0.25 280);
+  --primary-foreground: oklch(0.99 0 0);
+  --muted-foreground: oklch(0.52 0.03 275);
+  --border: oklch(0.92 0.01 275);
+  --input: oklch(0.92 0.01 275);
+  --ring: oklch(0.55 0.25 280);
+  --electric: oklch(0.62 0.22 255);
+  --gradient-momentum: linear-gradient(135deg, oklch(0.5 0.26 285), oklch(0.6 0.22 255));
+  --shadow-card: 0 30px 60px -20px color-mix(in oklab, var(--primary) 45%, transparent);
+}
+@theme inline {
+  --color-electric: var(--electric);
+  --font-sans: "Manrope", system-ui, sans-serif;
+}
+@utility bg-momentum { background-image: var(--gradient-momentum); }
+@utility shadow-momentum { box-shadow: var(--shadow-card); }
