@@ -73,13 +73,13 @@ test("POST /api/momentum computes money values in code and forwards user data", 
     });
 
     assert.equal(response.status, 200);
-  const result = await response.json();
-  assert.equal(result.questTitle, "Misiunea de azi");
-  assert.equal(result.questStory, "Redu puțin obiceiul.");
-  assert.equal(result.amountToSave, 4.4);
-  assert.equal(result.virtualReward, "Cafenea");
-  assert.equal(typeof result.futureRealValue, "number");
-  assert.equal(result.streakBonus, true);
+    const result = await response.json();
+    assert.equal(result.questTitle, "Misiunea de azi");
+    assert.equal(result.questStory, "Redu puțin obiceiul.");
+    assert.equal(result.amountToSave, 4.4);
+    assert.equal(result.virtualReward, "Cafenea");
+    assert.equal(typeof result.futureRealValue, "number");
+    assert.equal(result.streakBonus, true);
     const llmInput = JSON.parse(completionRequest.messages[1].content);
     assert.deepEqual(Object.keys(llmInput), ["habit", "rewards"]);
     assert.equal(llmInput.habit.total, 400);
