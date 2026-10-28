@@ -16,198 +16,172 @@ const BASE_URL = process.env.BASE_URL || "https://api.featherless.ai/v1";
 const MODEL_NAME =
   process.env.MODEL_NAME || "meta-llama/Meta-Llama-3.1-8B-Instruct";
 
-if (!API_KEY) {
-  console.error("❌  Lipsește API_KEY în .env — nu pot porni serverul.");
-  process.exit(1);
-}
+const openai = API_KEY
+  ? new OpenAI({ apiKey: API_KEY, baseURL: BASE_URL })
+  : null;
 
-// ─── OpenAI client pointed at Featherless ────────────────────
-const openai = new OpenAI({
-  apiKey: API_KEY,
-  baseURL: BASE_URL,
-});
+const SYSTEM_PROMPT = `Ești Oasis, un Game Master pentru un joc de simulare financiară în care utilizatorul construiește o insulă virtuală. Creează o Misiune Zilnică prietenoasă, legată de obiceiul și cheltuiala utilizatorului. Propune o economie realistă pentru azi și o recompensă virtuală tangibilă pe insulă. Estimează valoarea nominală la vârsta de 65 de ani presupunând că suma propusă este economisită zilnic și investită cu un randament orientativ de 6% pe an în titluri de stat. Menționează în poveste că proiecția este orientativă și nu garantată. Nu inventa date despre utilizator.
 
-// ─── Express App ─────────────────────────────────────────────
-const app = express();
-
-app.use(cors()); // permite cereri din orice origine (frontend pe alt port)
-app.use(express.json());
-
-// ─── System Prompt (conform implementationplan.md) ───────────
-const SYSTEM_PROMPT = `Ești un expert financiar comportamental din România. Primești vârsta, venitul și o cheltuială recurentă a unui tânăr. Găsește o modalitate de a reduce acea cheltuială (nu de a o elimina) și calculează empiric câți bani ar strânge până la 65 de ani dacă ar investi economiile în Titluri de Stat Tezaur (aprox 6% dobândă anuală). Nu ține prelegeri. Trebuie să returnezi răspunsul OBLIGATORIU în format JSON pur, fără markdown, fără backticks, cu următoarele chei exacte:
-habitToChange (string), monthlySavings (number), futureValueAt65 (number), investmentVehicle (string), actionMessage (string, mesaj motivațional scurt și prietenos), confidenceScore (number 0-100).
-Răspunde DOAR cu obiectul JSON, nimic altceva.
+Returnează un singur obiect JSON valid, fără markdown și fără text suplimentar, cu exact aceste chei și tipuri: questTitle (string), questStory (string), amountToSave (number în RON, pentru o zi), virtualReward (string), futureRealValue (number în RON, la 65 de ani), streakBonus (boolean, întotdeauna true). Răspunde DOAR cu JSON-ul.
 /no_think`;
 
-// ─── POST /api/momentum ─────────────────────────────────────
-app.post("/api/momentum", async (req, res) => {
-  try {
-    // 1. Validare minimală
-    const { age, monthlyIncome, guiltyPleasure, monthlyGuiltyPleasureSpend } =
-      req.body;
+function extractJsonObject(text) {
+  const content = text.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+
+  for (let start = 0; start < content.length; start += 1) {
+    if (content[start] !== "{") continue;
+
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+
+    for (let index = start; index < content.length; index += 1) {
+      const character = content[index];
+
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (character === "\\") escaped = true;
+        else if (character === '"') inString = false;
+        continue;
+      }
+
+      if (character === '"') inString = true;
+      else if (character === "{") depth += 1;
+      else if (character === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          try {
+            const value = JSON.parse(content.slice(start, index + 1));
+            if (value && typeof value === "object" && !Array.isArray(value)) {
+              return value;
+            }
+          } catch {
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  throw new Error("Modelul nu a returnat un obiect JSON valid.");
+}
+
+function normalizeQuestResponse(parsed) {
+  for (const key of ["questTitle", "questStory", "virtualReward"]) {
+    if (typeof parsed[key] !== "string" || !parsed[key].trim()) {
+      throw new Error(`Câmp invalid în răspunsul modelului: ${key}.`);
+    }
+  }
+
+  for (const key of ["amountToSave", "futureRealValue"]) {
+    if (typeof parsed[key] !== "number" || !Number.isFinite(parsed[key]) || parsed[key] < 0) {
+      throw new Error(`Câmp numeric invalid în răspunsul modelului: ${key}.`);
+    }
+  }
+
+  return {
+    questTitle: parsed.questTitle.trim(),
+    questStory: parsed.questStory.trim(),
+    amountToSave: parsed.amountToSave,
+    virtualReward: parsed.virtualReward.trim(),
+    futureRealValue: parsed.futureRealValue,
+    streakBonus: true,
+  };
+}
+
+function createApp(llmClient = openai) {
+  const app = express();
+  app.use(cors());
+  app.use(express.json());
+
+  app.post("/api/momentum", async (req, res) => {
+    const body = req.body;
+    const guiltyPleasure =
+      typeof body?.guiltyPleasure === "string" ? body.guiltyPleasure.trim() : "";
 
     if (
-      age == null ||
-      monthlyIncome == null ||
+      !body ||
+      !Number.isInteger(body.age) ||
+      body.age < 1 ||
+      body.age > 120 ||
+      typeof body.monthlyIncome !== "number" ||
+      !Number.isFinite(body.monthlyIncome) ||
+      body.monthlyIncome < 0 ||
       !guiltyPleasure ||
-      monthlyGuiltyPleasureSpend == null
+      typeof body.monthlyGuiltyPleasureSpend !== "number" ||
+      !Number.isFinite(body.monthlyGuiltyPleasureSpend) ||
+      body.monthlyGuiltyPleasureSpend < 0
     ) {
       return res.status(400).json({
         error:
-          "Toate câmpurile sunt obligatorii: age, monthlyIncome, guiltyPleasure, monthlyGuiltyPleasureSpend",
+          "Trimite age, monthlyIncome, guiltyPleasure și monthlyGuiltyPleasureSpend cu valori valide.",
       });
     }
 
-    // 2. Construim mesajul utilizatorului pentru LLM
-    const userMessage = `
-Datele utilizatorului:
-- Vârstă: ${age} ani
-- Venit lunar: ${monthlyIncome} RON
-- Plăcere vinovată: ${guiltyPleasure}
-- Cheltuială lunară pe plăcerea vinovată: ${monthlyGuiltyPleasureSpend} RON
-
-Generează recomandarea financiară în format JSON.`.trim();
-
-    console.log(`\n📥  Cerere primită:`, { age, monthlyIncome, guiltyPleasure, monthlyGuiltyPleasureSpend });
-
-    // 3. Apel către Featherless AI (OpenAI-compatible)
-    const completion = await openai.chat.completions.create({
-      model: MODEL_NAME,
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: userMessage },
-      ],
-      temperature: 0.7,
-      max_tokens: 1024,
-      extra_body: {
-        chat_template_kwargs: { enable_thinking: false },
-      },
-    });
-
-    const rawResponse = completion.choices[0]?.message?.content;
-    console.log(`🤖  Răspuns brut LLM:\n`, rawResponse);
-
-    if (!rawResponse) {
-      throw new Error("LLM-ul a returnat un răspuns gol.");
+    if (!llmClient) {
+      return res.status(503).json({
+        error: "LLM-ul nu este configurat. Verifică API_KEY în backend/.env.",
+      });
     }
 
-    // 4. Parsăm JSON-ul din răspunsul LLM-ului
-    //    Curățăm thinking tags (Qwen3+) și backticks
-    let cleanedResponse = rawResponse.trim();
+    const userMessage = `Datele utilizatorului:\n- Vârstă: ${body.age} ani\n- Venit lunar: ${body.monthlyIncome} RON\n- Obicei: ${guiltyPleasure}\n- Cheltuială lunară pentru acest obicei: ${body.monthlyGuiltyPleasureSpend} RON\n\nGenerează misiunea Oasis în formatul JSON cerut.`;
 
-    // Eliminăm Qwen3 thinking tags dacă apar
-    cleanedResponse = cleanedResponse
-      .replace(/<think>[\s\S]*?<\/think>/g, "")
-      .trim();
-
-    // Eliminăm eventualele blocuri markdown ```json ... ```
-    cleanedResponse = cleanedResponse
-      .replace(/^```json\s*/i, "")
-      .replace(/^```\s*/i, "")
-      .replace(/\s*```$/i, "")
-      .trim();
-
-    let parsed;
     try {
-      parsed = JSON.parse(cleanedResponse);
-    } catch (parseErr) {
-      // Încercăm să extragem JSON-ul cu regex dacă parsarea directă eșuează
-      const jsonMatch = cleanedResponse.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        parsed = JSON.parse(jsonMatch[0]);
-      } else {
-        throw new Error(
-          `Nu am putut parsa răspunsul LLM ca JSON: ${cleanedResponse}`
-        );
+      const completion = await llmClient.chat.completions.create({
+        model: MODEL_NAME,
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: userMessage },
+        ],
+        temperature: 0.4,
+        max_tokens: 700,
+        extra_body: { chat_template_kwargs: { enable_thinking: false } },
+      });
+
+      const rawResponse = completion.choices[0]?.message?.content;
+      if (typeof rawResponse !== "string" || !rawResponse.trim()) {
+        throw new Error("Modelul a returnat un răspuns gol.");
       }
+
+      return res.json(normalizeQuestResponse(extractJsonObject(rawResponse)));
+    } catch (error) {
+      console.error("Eroare la generarea misiunii Oasis:", error.message || error);
+      return res.status(502).json({
+        error: "Nu am putut genera misiunea cu modelul AI. Verifică backendul și configurația Featherless, apoi încearcă din nou.",
+      });
     }
-
-    // 5. Validăm cheile obligatorii conform contractului
-    const requiredKeys = [
-      "habitToChange",
-      "monthlySavings",
-      "futureValueAt65",
-      "investmentVehicle",
-      "actionMessage",
-      "confidenceScore",
-    ];
-
-    for (const key of requiredKeys) {
-      if (!(key in parsed)) {
-        console.warn(`⚠️  Cheia "${key}" lipsește din răspunsul LLM, se adaugă valoare default.`);
-      }
-    }
-
-    // Asigurăm structura contractului cu valori fallback
-    const response = {
-      habitToChange: parsed.habitToChange || guiltyPleasure,
-      monthlySavings: Number(parsed.monthlySavings) || 0,
-      futureValueAt65: Number(parsed.futureValueAt65) || 0,
-      investmentVehicle:
-        parsed.investmentVehicle || "Titluri de stat Tezaur (fără taxe)",
-      actionMessage:
-        parsed.actionMessage || "Încearcă să reduci cheltuielile pe " + guiltyPleasure + " și investește diferența!",
-      confidenceScore: Number(parsed.confidenceScore) || 75,
-    };
-
-    console.log(`✅  Răspuns trimis către frontend:`, response);
-    return res.json(response);
-  } catch (err) {
-    console.error(`\n❌  Eroare:`, err.message || err);
-
-    // Fallback: dacă LLM-ul pică, returnăm un răspuns calculat simplu
-    const { age, monthlyIncome, guiltyPleasure, monthlyGuiltyPleasureSpend } =
-      req.body;
-
-    if (age && monthlyGuiltyPleasureSpend) {
-      const monthlySavings = Math.round(monthlyGuiltyPleasureSpend * 0.5);
-      const yearsToInvest = 65 - age;
-      const annualRate = 0.06;
-      // Future Value of Annuity formula
-      const futureValue = Math.round(
-        monthlySavings *
-          12 *
-          ((Math.pow(1 + annualRate, yearsToInvest) - 1) / annualRate)
-      );
-
-      const fallbackResponse = {
-        habitToChange: guiltyPleasure || "Cheltuieli recurente",
-        monthlySavings,
-        futureValueAt65: futureValue,
-        investmentVehicle: "Titluri de stat Tezaur (fără taxe)",
-        actionMessage: `Dacă reduci cheltuielile pe ${guiltyPleasure || "plăcerea ta vinovată"} cu 50%, ai putea economisi ${monthlySavings} RON/lună. Investiți în Tezaur, la 65 de ani ai avea ~${futureValue.toLocaleString("ro-RO")} RON.`,
-        confidenceScore: 60,
-      };
-
-      console.log(`🔄  Fallback matematic trimis:`, fallbackResponse);
-      return res.json(fallbackResponse);
-    }
-
-    return res.status(500).json({
-      error: "Eroare internă la procesarea cererii. Încearcă din nou.",
-    });
-  }
-});
-
-// ─── Health Check ────────────────────────────────────────────
-app.get("/", (req, res) => {
-  res.json({
-    status: "ok",
-    service: "Momentum API",
-    model: MODEL_NAME,
-    timestamp: new Date().toISOString(),
   });
-});
 
-app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", model: MODEL_NAME });
-});
+  app.get("/", (req, res) => {
+    res.json({
+      status: "ok",
+      service: "Momentum API",
+      model: MODEL_NAME,
+      timestamp: new Date().toISOString(),
+    });
+  });
 
-// ─── Start Server ────────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`\n🚀  Momentum API rulează pe http://localhost:${PORT}`);
-  console.log(`📡  Model: ${MODEL_NAME}`);
-  console.log(`🔗  Base URL: ${BASE_URL}`);
-  console.log(`\n📌  Endpoint: POST http://localhost:${PORT}/api/momentum`);
-  console.log(`📌  Health:   GET  http://localhost:${PORT}/api/health\n`);
-});
+  app.get("/api/health", (req, res) => {
+    res.json({ status: "ok", model: MODEL_NAME, llmConfigured: Boolean(llmClient) });
+  });
+
+  return app;
+}
+
+const app = createApp();
+
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Momentum API rulează pe http://localhost:${PORT}`);
+    console.log(`Model: ${MODEL_NAME}`);
+    console.log(`LLM configurat: ${Boolean(openai)}`);
+  });
+}
+
+module.exports = {
+  app,
+  createApp,
+  extractJsonObject,
+  normalizeQuestResponse,
+  SYSTEM_PROMPT,
+};
