@@ -1,6 +1,12 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { createApp, extractJsonObject, normalizeQuestResponse } = require("./server");
+const {
+  createApp,
+  extractJsonObject,
+  normalizeOasisAnalysis,
+  normalizeQuestResponse,
+  OASIS_BANK_TRANSACTIONS,
+} = require("./server");
 
 const requestBody = {
   age: 24,
@@ -111,5 +117,60 @@ test("normalizes the Oasis response and rejects missing fields", () => {
   assert.throws(
     () => normalizeQuestResponse({ questTitle: "Incomplete" }),
     /questStory/,
+  );
+});
+
+test("POST /api/oasis sends ten transactions and returns the shared contract", async () => {
+  const analysis = {
+    questTitle: "Operațiunea: Salvatorul de Cafea",
+    analysisMessage: "Ai cumpărat 6 cafele, în total 120 RON.",
+    proposalMessage: "Redu cu două cafele și deblochează o cafenea.",
+    amountToSave: 40,
+    virtualReward: "Cafenea & Pisicuță",
+    rewardType: "building",
+  };
+  let completionRequest;
+  const app = createApp({
+    chat: {
+      completions: {
+        create: async (request) => {
+          completionRequest = request;
+          return { choices: [{ message: { content: JSON.stringify(analysis) } }] };
+        },
+      },
+    },
+  });
+
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/oasis`, { method: "POST" });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), analysis);
+    assert.equal(OASIS_BANK_TRANSACTIONS.length, 10);
+    assert.equal(
+      OASIS_BANK_TRANSACTIONS.filter((transaction) =>
+        ["Starbucks", "5 to go"].includes(transaction.merchant),
+      ).length,
+      6,
+    );
+    assert.equal(
+      OASIS_BANK_TRANSACTIONS
+        .filter((transaction) => ["Starbucks", "5 to go"].includes(transaction.merchant))
+        .reduce((sum, transaction) => sum + transaction.amount, 0),
+      120,
+    );
+    assert.match(completionRequest.messages[1].content, /Salariu/);
+  });
+});
+
+test("Oasis contract rejects responses without rewardType", () => {
+  assert.throws(
+    () => normalizeOasisAnalysis({
+      questTitle: "Quest",
+      analysisMessage: "Analysis",
+      proposalMessage: "Proposal",
+      amountToSave: 40,
+      virtualReward: "Cafenea",
+    }),
+    /rewardType/,
   );
 });
