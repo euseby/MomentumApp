@@ -4,31 +4,45 @@ export interface MomentumRequest {
   guiltyPleasure: string;
   monthlyGuiltyPleasureSpend: number;
 }
-export interface MomentumResponse {
-  habitToChange: string;
-  monthlySavings: number;
-  futureValueAt65: number;
-  investmentVehicle: string;
-  actionMessage: string;
-  confidenceScore: number;
+
+/** Contractul JSON „Oasis” — sursa de adevăr cu backend-ul. */
+export interface OasisResponse {
+  questTitle: string;
+  questStory: string;
+  amountToSave: number;
+  virtualReward: string;
+  futureRealValue: number;
+  streakBonus: boolean;
 }
+
 export const API_URL = "http://localhost:8000/api/momentum";
-export const MOCK_RESPONSE: MomentumResponse = {
-  habitToChange: "Comenzi de mâncare",
-  monthlySavings: 200,
-  futureValueAt65: 125000,
-  investmentVehicle: "Titluri de stat Tezaur (fără taxe)",
-  actionMessage:
-    "Dacă înlocuiești 2 comenzi Tazz pe săptămână cu gătitul acasă, la 65 de ani vei avea echivalentul unui apartament.",
-  confidenceScore: 85,
+
+export const MOCK_RESPONSE: OasisResponse = {
+  questTitle: "Misiunea de Vineri: Salvatorul de Dopamină",
+  questStory:
+    "Știu că vrei să iei un Bolt spre casă. Dacă iei metroul azi, primești o Casă pe Plajă pe insula ta și banii se duc în portofoliul tău.",
+  amountToSave: 25,
+  virtualReward: "Casă pe Plajă",
+  futureRealValue: 12500,
+  streakBonus: true,
 };
-function isValid(d: unknown): d is MomentumResponse {
-  const o = d as Partial<Record<keyof MomentumResponse, unknown>>;
-  return !!o && typeof o.habitToChange === "string" && typeof o.monthlySavings === "number" &&
-    typeof o.futureValueAt65 === "number" && typeof o.investmentVehicle === "string" &&
-    typeof o.actionMessage === "string" && typeof o.confidenceScore === "number";
+
+function isValid(d: unknown): d is OasisResponse {
+  const o = d as Partial<Record<keyof OasisResponse, unknown>>;
+  return (
+    !!o &&
+    typeof o.questTitle === "string" &&
+    typeof o.questStory === "string" &&
+    typeof o.amountToSave === "number" &&
+    typeof o.virtualReward === "string" &&
+    typeof o.futureRealValue === "number" &&
+    typeof o.streakBonus === "boolean"
+  );
 }
-export async function fetchMomentum(payload: MomentumRequest): Promise<{ data: MomentumResponse; mock: boolean }> {
+
+export async function fetchMomentum(
+  payload: MomentumRequest,
+): Promise<{ data: OasisResponse; mock: boolean }> {
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 20000);
@@ -52,6 +66,7 @@ export async function fetchMomentum(payload: MomentumRequest): Promise<{ data: M
 /** Valoarea viitoare a unei contribuții lunare, cu dobândă compusă lunar (Tezaur ~6%/an). */
 export function projectValue(monthly: number, years: number, annualRate = 0.06): number {
   if (monthly <= 0 || years <= 0) return 0;
-  const r = annualRate / 12, n = Math.round(years * 12);
+  const r = annualRate / 12,
+    n = Math.round(years * 12);
   return Math.round(monthly * ((Math.pow(1 + r, n) - 1) / r));
 }

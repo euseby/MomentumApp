@@ -2,18 +2,19 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   ArrowLeft, ArrowRight, Check, Coffee, Bike, Shirt, Wine, Gamepad2, Cigarette,
-  Plane, Trees, Building2, ShieldCheck, Sparkles, Landmark, RotateCcw,
+  Plane, Trees, Building2, Flame, Sparkles, RotateCcw, Zap,
 } from "lucide-react";
-import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis } from "recharts";
-import { fetchMomentum, projectValue, type MomentumResponse } from "@/lib/momentum";
+import { fetchMomentum, projectValue, type OasisResponse } from "@/lib/momentum";
 
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Momentum — Stilul tău de viață, transformat în avere" },
-      { name: "description", content: "Micro-acțiuni automate care transformă cheltuielile zilnice în titluri de stat și siguranță financiară." },
-      { property: "og:title", content: "Momentum — Behavioral Wealth" },
-      { property: "og:description", content: "Micro-acțiuni automate care transformă cheltuielile zilnice în siguranță financiară." },
+      { title: "Oasis — Misiuni zilnice, avere reală" },
+      { name: "description", content: "Transformă micro-acțiunile zilnice în recompense virtuale și bani reali investiți. Insula ta crește cu fiecare misiune." },
+      { property: "og:title", content: "Oasis — Behavioral Wealth" },
+      { property: "og:description", content: "Misiuni zilnice gamificate care transformă cheltuielile mici în avere la 65 de ani." },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary_large_image" },
     ],
   }),
   component: Index,
@@ -35,7 +36,19 @@ const GOALS = [
   { id: "city", label: "Liniște în oraș", desc: "Confort, fără rate", icon: Building2 },
 ];
 
-type Stage = "intro" | "wizard" | "loading" | "result" | "activated";
+function rewardEmoji(reward: string): string {
+  const r = reward.toLowerCase();
+  if (r.includes("plaj")) return "🏝️";
+  if (r.includes("copac") || r.includes("pădure")) return "🌳";
+  if (r.includes("castel")) return "🏰";
+  if (r.includes("vilă") || r.includes("vila") || r.includes("casă") || r.includes("casa")) return "🏡";
+  if (r.includes("barc") || r.includes("yacht")) return "⛵";
+  if (r.includes("munte") || r.includes("caban")) return "⛰️";
+  if (r.includes("grădin") || r.includes("gradin")) return "🌺";
+  return "✨";
+}
+
+type Stage = "intro" | "wizard" | "loading" | "oasis" | "invested";
 
 function Index() {
   const [stage, setStage] = useState<Stage>("intro");
@@ -46,9 +59,9 @@ function Index() {
   const [custom, setCustom] = useState("");
   const [spend, setSpend] = useState(400);
   const [goal, setGoal] = useState("country");
-  const [result, setResult] = useState<MomentumResponse | null>(null);
+  const [quest, setQuest] = useState<OasisResponse | null>(null);
   const [isMock, setIsMock] = useState(false);
-  const [saving, setSaving] = useState(0);
+  const [streak, setStreak] = useState(4);
 
   const guilty = pleasure === "__custom" ? custom.trim() : pleasure;
   const canNext = [true, true, !!guilty, spend > 0, !!goal][step];
@@ -57,21 +70,22 @@ function Index() {
   const run = async () => {
     setStage("loading");
     const { data, mock } = await fetchMomentum({ age, monthlyIncome: income, guiltyPleasure: guilty, monthlyGuiltyPleasureSpend: spend });
-    setResult(data); setIsMock(mock); setSaving(Math.min(data.monthlySavings, spend)); setStage("result");
+    setQuest(data); setIsMock(mock); setStage("oasis");
   };
   const next = () => (step < STEPS - 1 ? setStep(step + 1) : run());
   const restart = () => { setStage("wizard"); setStep(0); };
+  const invest = () => { setStreak((s) => s + 1); setStage("invested"); };
 
   return (
-    <main className="min-h-screen bg-background font-sans">
-      <div className="mx-auto flex min-h-screen max-w-md flex-col px-6 pb-8 pt-6">
-        <header className="mb-6 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="grid h-8 w-8 place-items-center rounded-xl bg-momentum"><Sparkles className="h-4 w-4 text-primary-foreground" /></div>
-            <span className="text-lg font-extrabold tracking-tight text-foreground">Momentum</span>
-          </div>
-          <span className="flex items-center gap-1 text-xs font-medium text-muted-foreground"><ShieldCheck className="h-3.5 w-3.5" /> Garantat de stat</span>
-        </header>
+    <main className="relative min-h-screen overflow-hidden bg-background font-sans">
+      {/* ambient neon blobs */}
+      <div aria-hidden className="pointer-events-none absolute inset-0">
+        <div className="absolute -left-24 -top-24 h-72 w-72 rounded-full bg-primary/25 blur-3xl animate-oasis" />
+        <div className="absolute -bottom-32 -right-24 h-80 w-80 rounded-full bg-neon/15 blur-3xl animate-oasis" style={{ animationDelay: "-7s" }} />
+      </div>
+
+      <div className="relative mx-auto flex min-h-screen max-w-md flex-col px-6 pb-8 pt-6">
+        <TopBar streak={streak} bonus={quest?.streakBonus ?? false} />
 
         {stage === "intro" && <Intro onStart={() => setStage("wizard")} />}
 
@@ -79,7 +93,7 @@ function Index() {
           <div className="flex flex-1 flex-col">
             <div className="mb-8 flex gap-1.5">
               {Array.from({ length: STEPS }).map((_, i) => (
-                <div key={i} className={`h-1.5 flex-1 rounded-full transition-colors duration-500 ${i <= step ? "bg-primary" : "bg-border"}`} />
+                <div key={i} className={`h-1.5 flex-1 rounded-full transition-colors duration-500 ${i <= step ? "bg-primary" : "bg-secondary"}`} />
               ))}
             </div>
             <div key={step} className="flex-1 animate-in fade-in slide-in-from-right-6 duration-300">
@@ -107,7 +121,7 @@ function Index() {
                   </div>
                   <input value={custom} onFocus={() => setPleasure("__custom")} onChange={(e) => { setCustom(e.target.value); setPleasure("__custom"); }}
                     placeholder="Altceva? Scrie aici…"
-                    className={`mt-3 w-full rounded-2xl border bg-card px-4 py-3.5 font-medium text-foreground outline-none transition placeholder:text-muted-foreground/70 ${pleasure === "__custom" ? "border-primary ring-2 ring-ring/30" : "border-input"}`} />
+                    className={`mt-3 w-full rounded-2xl border bg-card px-4 py-3.5 font-medium text-foreground outline-none transition placeholder:text-muted-foreground/70 ${pleasure === "__custom" ? "border-primary ring-2 ring-ring/40" : "border-input"}`} />
                 </Q>
               )}
               {step === 3 && (
@@ -118,13 +132,13 @@ function Index() {
                 </Q>
               )}
               {step === 4 && (
-                <Q title="Cum vrei să arate viața ta la 60+?" hint="Asta e motivația ta. O vom ține în fața ochilor.">
+                <Q title="Cum vrei să arate insula ta?" hint="Visul tău de la 60+. Misiunile zilnice te duc acolo.">
                   <div className="space-y-3">
                     {GOALS.map(({ id, label, desc, icon: Icon }) => (
                       <Choice key={id} active={goal === id} onClick={() => setGoal(id)} row>
-                        <div className="grid h-11 w-11 place-items-center rounded-xl bg-secondary text-primary"><Icon className="h-5 w-5" /></div>
+                        <div className="grid h-11 w-11 place-items-center rounded-xl bg-secondary text-neon"><Icon className="h-5 w-5" /></div>
                         <div className="text-left"><p className="font-bold">{label}</p><p className="text-sm text-muted-foreground">{desc}</p></div>
-                        {goal === id && <Check className="ml-auto h-5 w-5 text-primary" />}
+                        {goal === id && <Check className="ml-auto h-5 w-5 text-emerald-glow" />}
                       </Choice>
                     ))}
                   </div>
@@ -133,10 +147,10 @@ function Index() {
             </div>
             <div className="mt-8 flex gap-3">
               <button onClick={() => (step ? setStep(step - 1) : setStage("intro"))} aria-label="Înapoi"
-                className="grid h-14 w-14 place-items-center rounded-2xl border border-border bg-card text-foreground transition active:scale-95"><ArrowLeft className="h-5 w-5" /></button>
+                className="grid h-14 w-14 place-items-center rounded-2xl glass text-foreground transition active:scale-95"><ArrowLeft className="h-5 w-5" /></button>
               <button onClick={next} disabled={!canNext}
-                className="flex h-14 flex-1 items-center justify-center gap-2 rounded-2xl bg-momentum font-bold text-primary-foreground shadow-momentum transition active:scale-[0.98] disabled:opacity-40 disabled:shadow-none">
-                {step === STEPS - 1 ? "Găsește-mi Momentumul" : "Continuă"} <ArrowRight className="h-4 w-4" />
+                className="flex h-14 flex-1 items-center justify-center gap-2 rounded-2xl bg-oasis font-bold text-primary-foreground glow-primary transition hover:brightness-110 active:scale-[0.98] disabled:opacity-40 disabled:shadow-none">
+                {step === STEPS - 1 ? "Primește misiunea" : "Continuă"} <ArrowRight className="h-4 w-4" />
               </button>
             </div>
           </div>
@@ -144,134 +158,146 @@ function Index() {
 
         {stage === "loading" && <Loading />}
 
-        {stage === "result" && result && (
-          <Result result={result} isMock={isMock} age={age} spend={spend} goal={goal} saving={saving} setSaving={setSaving}
-            onActivate={() => setStage("activated")} onRestart={restart} />
+        {stage === "oasis" && quest && (
+          <Oasis quest={quest} isMock={isMock} onInvest={invest} onRestart={restart} />
         )}
 
-        {stage === "activated" && result && (
-          <Activated saving={saving} habit={result.habitToChange} vehicle={result.investmentVehicle} onDone={restart} />
+        {stage === "invested" && quest && (
+          <Invested quest={quest} streak={streak} onDone={restart} />
         )}
       </div>
     </main>
   );
 }
 
+function TopBar({ streak, bonus }: { streak: number; bonus: boolean }) {
+  return (
+    <header className="mb-6 flex items-center justify-between">
+      <div className="flex items-center gap-2">
+        <div className="grid h-8 w-8 place-items-center rounded-xl bg-oasis glow-primary"><Sparkles className="h-4 w-4 text-primary-foreground" /></div>
+        <span className="text-lg font-extrabold tracking-tight text-foreground">Oasis</span>
+      </div>
+      <div className="flex items-center gap-2">
+        {bonus && (
+          <span className="flex items-center gap-1 rounded-full glass px-2.5 py-1 text-xs font-bold text-emerald-glow">
+            <Zap className="h-3 w-3" /> Bonus
+          </span>
+        )}
+        <span className="flex items-center gap-1.5 rounded-full glass px-3 py-1.5 text-sm font-extrabold">
+          <Flame className="h-4 w-4 text-streak" />
+          <span className="text-streak">{streak} {streak === 1 ? "zi" : "zile"} la rând</span>
+        </span>
+      </div>
+    </header>
+  );
+}
+
 function Intro({ onStart }: { onStart: () => void }) {
   return (
     <div className="flex flex-1 flex-col animate-in fade-in duration-500">
-      <div className="relative mt-4 overflow-hidden rounded-3xl bg-momentum p-6 text-primary-foreground shadow-momentum">
-        <p className="text-sm opacity-80">Doar din cafeaua de dimineață</p>
-        <p className="mt-1 text-4xl font-extrabold tracking-tight">{ron(projectValue(150, 38))}</p>
-        <p className="mt-1 text-sm opacity-80">la 65 de ani, în titluri de stat</p>
-        <div className="absolute -right-10 -top-10 h-40 w-40 rounded-full bg-primary-foreground/10" />
+      <div className="relative mt-2 overflow-hidden rounded-3xl glass p-6 glow-primary">
+        <div aria-hidden className="absolute -right-10 -top-10 h-40 w-40 rounded-full bg-primary/20 blur-2xl" />
+        <p className="text-sm text-muted-foreground">Doar din cafeaua de dimineață</p>
+        <p className="mt-1 text-4xl font-extrabold tracking-tight text-foreground">{ron(projectValue(150, 38))}</p>
+        <p className="mt-1 text-sm text-muted-foreground">la 65 de ani, în titluri de stat</p>
+        <span className="absolute bottom-4 right-5 text-5xl animate-float">🏝️</span>
       </div>
       <h1 className="mt-8 text-4xl font-extrabold leading-tight tracking-tight text-foreground">
-        Nu te învățăm să economisești.<br /><span className="bg-momentum bg-clip-text text-transparent">Îți transformăm viața în avere.</span>
+        Nu e o aplicație de buget.<br />
+        <span className="bg-oasis bg-clip-text text-transparent">E insula ta. Crește cu fiecare misiune.</span>
       </h1>
       <ul className="mt-6 space-y-3 text-sm text-muted-foreground">
-        {["Răspunzi la 5 întrebări despre stilul tău de viață", "AI-ul găsește o micro-acțiune pe măsura ta", "Banii merg automat în Titluri de Stat Tezaur"].map((t, i) => (
-          <li key={t} className="flex items-center gap-3"><span className="grid h-6 w-6 place-items-center rounded-full bg-secondary text-xs font-bold text-primary">{i + 1}</span>{t}</li>
+        {["Răspunzi la 5 întrebări despre stilul tău de viață", "Primești o misiune zilnică pe măsura ta", "O completezi → recompensă pe insulă + bani reali investiți"].map((t, i) => (
+          <li key={t} className="flex items-center gap-3"><span className="grid h-6 w-6 place-items-center rounded-full bg-secondary text-xs font-bold text-neon">{i + 1}</span>{t}</li>
         ))}
       </ul>
-      <button onClick={onStart} className="mt-auto flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-momentum font-bold text-primary-foreground shadow-momentum transition active:scale-[0.98]">
-        Începe — durează 1 minut <ArrowRight className="h-4 w-4" />
+      <button onClick={onStart} className="mt-auto flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-oasis font-bold text-primary-foreground glow-primary transition hover:brightness-110 active:scale-[0.98]">
+        Intră pe insulă — 1 minut <ArrowRight className="h-4 w-4" />
       </button>
     </div>
   );
 }
 
 function Loading() {
-  const steps = ["Analizăm stilul de viață...", "Căutăm micro-acțiunea potrivită...", "Calculăm dobânda compusă..."];
+  const steps = ["Analizăm stilul de viață...", "Pregătim misiunea zilei...", "Plantăm recompensa pe insulă..."];
   const [i, setI] = useState(0);
   useEffect(() => { const t = setInterval(() => setI((x) => (x + 1) % steps.length), 900); return () => clearInterval(t); }, [steps.length]);
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-6">
       <div className="relative grid h-20 w-20 place-items-center">
         <span className="absolute inset-0 rounded-full bg-primary/30 animate-ring" />
-        <div className="h-16 w-16 animate-spin rounded-full border-4 border-border border-t-primary" />
+        <div className="h-16 w-16 animate-spin rounded-full border-4 border-secondary border-t-primary" />
       </div>
       <p key={i} className="font-semibold text-foreground animate-in fade-in duration-300">{steps[i]}</p>
     </div>
   );
 }
 
-function Result({ result, isMock, age, spend, goal, saving, setSaving, onActivate, onRestart }: {
-  result: MomentumResponse; isMock: boolean; age: number; spend: number; goal: string; saving: number;
-  setSaving: (n: number) => void; onActivate: () => void; onRestart: () => void;
+function Oasis({ quest, isMock, onInvest, onRestart }: {
+  quest: OasisResponse; isMock: boolean; onInvest: () => void; onRestart: () => void;
 }) {
-  const years = Math.max(1, 65 - age);
-  const adjusted = saving !== result.monthlySavings;
-  const total = adjusted ? projectValue(saving, years) : result.futureValueAt65;
-  const data = useMemo(() => Array.from({ length: years + 1 }, (_, y) => ({ age: age + y, v: projectValue(saving, y) })), [saving, years, age]);
-  const goalLabel = GOALS.find((g) => g.id === goal)?.label ?? "";
-  const invested = saving * 12 * years;
-
+  const emoji = useMemo(() => rewardEmoji(quest.virtualReward), [quest.virtualReward]);
   return (
     <div className="flex flex-1 flex-col animate-in fade-in zoom-in-95 duration-500">
-      <div className="rounded-3xl bg-momentum p-6 text-primary-foreground shadow-momentum">
-        <div className="flex items-center justify-between text-sm">
-          <span className="opacity-80">Obicei de ajustat</span>
-          <span className="rounded-full bg-primary-foreground/20 px-2.5 py-1 text-xs font-bold">{result.confidenceScore}% potrivire</span>
-        </div>
-        <p className="mt-1 text-xl font-bold">{result.habitToChange}</p>
-        <p className="mt-6 text-sm opacity-80">La 65 de ani · pentru „{goalLabel}”</p>
-        <p className="text-5xl font-extrabold tracking-tight tabular-nums">{ron(total)}</p>
-        <p className="mt-1 text-xs opacity-70">din care tu pui doar {ron(invested)} — restul e dobândă</p>
-        <div className="-mx-2 mt-4 h-24">
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={data}>
-              <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="currentColor" stopOpacity={0.5} /><stop offset="100%" stopColor="currentColor" stopOpacity={0} /></linearGradient></defs>
-              <XAxis dataKey="age" hide />
-              <Tooltip cursor={false} contentStyle={{ borderRadius: 12, border: "none", color: "var(--foreground)" }} formatter={(v: number) => ron(v)} labelFormatter={(l) => `La ${l} ani`} />
-              <Area type="monotone" dataKey="v" stroke="currentColor" strokeWidth={2.5} fill="url(#g)" />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-        <div className="mt-2 flex items-center gap-2 border-t border-primary-foreground/20 pt-4 text-sm">
-          <Landmark className="h-4 w-4 opacity-80" /><span className="font-semibold">{result.investmentVehicle}</span>
+      {/* Insula — zona vizuală Oasis */}
+      <div className="relative mt-1 overflow-hidden rounded-3xl glass p-6 glow-primary">
+        <div aria-hidden className="absolute inset-0 bg-oasis opacity-20 animate-oasis" />
+        <div aria-hidden className="absolute -bottom-8 -left-8 h-32 w-32 rounded-full bg-neon/20 blur-2xl" />
+        <div className="relative flex flex-col items-center py-6 text-center">
+          <span className="text-8xl drop-shadow-2xl animate-float">{emoji}</span>
+          <p className="mt-4 text-xs font-bold uppercase tracking-widest text-neon">Recompensa de azi</p>
+          <p className="mt-1 text-2xl font-extrabold tracking-tight text-foreground">{quest.virtualReward}</p>
         </div>
       </div>
 
-      <p className="mt-6 text-lg font-medium leading-relaxed text-foreground">{result.actionMessage}</p>
-
-      <div className="mt-6 rounded-2xl border border-border bg-card p-4">
-        <div className="flex items-baseline justify-between">
-          <span className="text-sm font-medium text-muted-foreground">Cât redirecționezi lunar</span>
-          <span className="text-lg font-extrabold text-primary tabular-nums">{ron(saving)}</span>
+      {/* Daily Quest Card */}
+      <div className="mt-4 rounded-3xl glass p-5">
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Misiunea zilei</p>
+          <span className="rounded-full bg-emerald-glow/15 px-2.5 py-1 text-xs font-bold text-emerald-glow">+{ron(quest.futureRealValue)} la 65</span>
         </div>
-        <Range min={25} max={Math.max(spend, result.monthlySavings)} step={25} value={saving} onChange={setSaving} />
-        <p className="mt-2 text-xs text-muted-foreground">Trage ca să vezi cum se schimbă viitorul tău.</p>
+        <h2 className="mt-2 text-xl font-extrabold leading-snug tracking-tight text-foreground">{quest.questTitle}</h2>
+        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{quest.questStory}</p>
       </div>
       {isMock && <p className="mt-3 text-xs text-muted-foreground">Date demonstrative — serverul AI nu a răspuns.</p>}
 
-      <div className="mt-6 space-y-2">
-        <button onClick={onActivate} className="flex h-16 w-full items-center justify-center gap-2 rounded-2xl bg-foreground text-lg font-bold text-background transition active:scale-[0.98]">
-          <Sparkles className="h-5 w-5" /> Activează Regula
+      {/* Butonul de acțiune */}
+      <div className="mt-auto space-y-2 pt-6">
+        <button onClick={onInvest}
+          className="group flex h-16 w-full items-center justify-center gap-2 rounded-2xl bg-oasis text-lg font-extrabold text-primary-foreground glow-primary transition hover:scale-[1.02] hover:brightness-110 active:scale-[0.97]">
+          <Zap className="h-5 w-5 transition group-hover:scale-125" /> Investește {ron(quest.amountToSave)}
         </button>
-        <button onClick={onRestart} className="flex w-full items-center justify-center gap-1.5 py-2 text-sm font-medium text-muted-foreground"><RotateCcw className="h-3.5 w-3.5" /> Încearcă alt obicei</button>
+        <button onClick={onRestart} className="flex w-full items-center justify-center gap-1.5 py-2 text-sm font-medium text-muted-foreground">
+          <RotateCcw className="h-3.5 w-3.5" /> Altă misiune
+        </button>
       </div>
     </div>
   );
 }
 
-function Activated({ saving, habit, vehicle, onDone }: { saving: number; habit: string; vehicle: string; onDone: () => void }) {
+function Invested({ quest, streak, onDone }: { quest: OasisResponse; streak: number; onDone: () => void }) {
   return (
     <div className="flex flex-1 flex-col items-center justify-center text-center">
       <div className="relative grid h-28 w-28 place-items-center">
-        <span className="absolute inset-0 rounded-full bg-primary/30 animate-ring" />
-        <div className="grid h-24 w-24 place-items-center rounded-full bg-momentum shadow-momentum animate-pop"><Check className="h-12 w-12 text-primary-foreground" strokeWidth={3} /></div>
+        <span className="absolute inset-0 rounded-full bg-emerald-glow/30 animate-ring" />
+        <div className="grid h-24 w-24 place-items-center rounded-full bg-emerald-glow glow-emerald animate-pop">
+          <Check className="h-12 w-12 text-background" strokeWidth={3} />
+        </div>
       </div>
-      <h2 className="mt-8 text-3xl font-extrabold tracking-tight text-foreground animate-in fade-in slide-in-from-bottom-2 delay-300 duration-500 fill-mode-both">Regula e activă</h2>
+      <h2 className="mt-8 text-3xl font-extrabold tracking-tight text-foreground animate-in fade-in slide-in-from-bottom-2 delay-300 duration-500 fill-mode-both">
+        Misiune completată!
+      </h2>
       <p className="mt-3 max-w-xs text-muted-foreground animate-in fade-in delay-500 duration-500 fill-mode-both">
-        În fiecare lună, <b className="text-foreground">{ron(saving)}</b> economisiți din „{habit}” vor merge automat în {vehicle}.
+        <b className="text-foreground">{ron(quest.amountToSave)}</b> au plecat spre viitorul tău, iar <b className="text-emerald-glow">{quest.virtualReward}</b> e acum pe insula ta.
       </p>
-      <div className="mt-8 w-full space-y-2 rounded-2xl border border-border bg-card p-4 text-left text-sm animate-in fade-in delay-700 duration-500 fill-mode-both">
-        {[["Transfer automat", "Lunar, pe 1"], ["Poți opri oricând", "Fără penalizări"], ["Protecție", "Garantat de statul român"]].map(([a, b]) => (
-          <div key={a} className="flex justify-between"><span className="text-muted-foreground">{a}</span><span className="font-semibold text-foreground">{b}</span></div>
-        ))}
+      <div className="mt-6 flex items-center gap-2 rounded-full glass px-4 py-2 animate-in fade-in delay-700 duration-500 fill-mode-both">
+        <Flame className="h-4 w-4 text-streak" />
+        <span className="text-sm font-extrabold text-streak">Streak: {streak} zile</span>
+        {quest.streakBonus && <span className="text-xs font-bold text-emerald-glow">· bonus activ</span>}
       </div>
-      <button onClick={onDone} className="mt-8 w-full rounded-2xl border border-border bg-card py-4 font-bold text-foreground transition active:scale-[0.98]">Adaugă încă o regulă</button>
+      <button onClick={onDone} className="mt-8 w-full rounded-2xl glass py-4 font-bold text-foreground transition hover:brightness-110 active:scale-[0.98]">
+        Vezi misiunea de mâine
+      </button>
     </div>
   );
 }
@@ -288,7 +314,7 @@ function Range({ min, max, step = 1, value, onChange }: { min: number; max: numb
 function Choice({ active, onClick, row, children }: { active: boolean; onClick: () => void; row?: boolean; children: ReactNode }) {
   return (
     <button type="button" onClick={onClick}
-      className={`flex w-full gap-3 rounded-2xl border bg-card p-4 text-foreground transition active:scale-[0.97] ${row ? "items-center" : "flex-col items-start"} ${active ? "border-primary ring-2 ring-ring/30" : "border-border"}`}>
+      className={`flex w-full gap-3 rounded-2xl border glass p-4 text-foreground transition active:scale-[0.97] ${row ? "items-center" : "flex-col items-start"} ${active ? "border-primary ring-2 ring-ring/40" : "border-glass-border"}`}>
       {children}
     </button>
   );
