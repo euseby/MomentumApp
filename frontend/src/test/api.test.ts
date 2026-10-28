@@ -51,4 +51,9 @@ describe("Phase 1 API client", () => {
     expect(new Headers(fetchMock.mock.calls[0][1].headers).get("x-demo-user")).toBe("demo-radu");
     expect(fetchMock.mock.calls[1][0]).toBe("http://localhost:8000/api/projection?weeklySaving=40&age=24");
   });
+
+  it("explains how to recover from a backend connection failure", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+    await expect(getInsights("demo-ioana")).rejects.toThrow("Pornește serverul din folderul backend");
+  });
 });

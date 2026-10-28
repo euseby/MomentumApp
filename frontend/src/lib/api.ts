@@ -94,12 +94,20 @@ async function requestJson<T>(
   headers.set("x-demo-user", demoUserId);
   if (!(init.body instanceof FormData)) headers.set("Content-Type", "application/json");
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...init,
-    headers,
-    credentials: "include",
-    signal: init.signal || AbortSignal.timeout(20000),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      ...init,
+      headers,
+      credentials: "include",
+      signal: init.signal || AbortSignal.timeout(20000),
+    });
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new Error("Nu mă pot conecta la backend. Pornește serverul din folderul backend și reîncarcă pagina.");
+    }
+    throw error;
+  }
   const body: unknown = await response.json().catch(() => null);
   if (!response.ok) {
     const message = body && typeof body === "object" && "error" in body && typeof body.error === "string"

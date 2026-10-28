@@ -6,6 +6,7 @@ const {
   normalizeOasisAnalysis,
   normalizeQuestCopy,
   normalizeQuestResponse,
+  stripNumericClaims,
   addLedgerEntry,
   getWalletBalances,
 } = require("./server");
@@ -185,11 +186,15 @@ test("Oasis contract rejects responses without rewardType", () => {
   );
 });
 
-test("LLM quest copy cannot inject numeric claims", () => {
-  assert.throws(
-    () => normalizeQuestCopy({ questTitle: "Economisește 40 RON", rewardId: "cafenea" }),
-    /nu poate conține numere/,
-  );
+test("LLM quest copy strips numeric claims while code owns amounts", () => {
+  const copy = normalizeQuestCopy({
+    questTitle: "Misiunea 2026",
+    questStory: "Economisește 40 RON pentru oraș.",
+    rewardId: "cafenea",
+  }, { requireStory: true });
+  assert.equal(copy.questTitle, "Misiunea");
+  assert.equal(copy.questStory, "Economisește pentru oraș.");
+  assert.equal(stripNumericClaims("Quest 12,5 RON"), "Quest");
 });
 
 test("CSV parser handles comma delimiter, signed amounts, and skips bad rows", () => {
