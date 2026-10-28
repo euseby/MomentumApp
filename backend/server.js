@@ -24,164 +24,116 @@ const openai = API_KEY
     })
   : null;
 
-// ─── Express App ─────────────────────────────────────────────
-const app = express();
+// ─── System Prompt (conform implementationplan.md) ───────────
+const SYSTEM_PROMPT = `Ești Oasis, un Game Master pentru un joc de simulare financiară în care utilizatorul construiește o insulă virtuală. Creează o Misiune Zilnică prietenoasă, legată de obiceiul și cheltuiala utilizatorului. Propune o economie realistă pentru azi și o recompensă virtuală tangibilă pe insulă. Estimează valoarea nominală la vârsta de 65 de ani presupunând că suma propusă este economisită zilnic și investită cu un randament orientativ de 6% pe an în titluri de stat. Menționează că proiecția este orientativă și nu garantată. Nu inventa date despre utilizator.
 
-app.use(cors()); // permite cereri din orice origine (frontend pe alt port)
-app.use(express.json());
-
-// ─── System Prompt ───────────────────────────────────────────
-const SYSTEM_PROMPT = `Ești Oasis, un Game Master pentru un joc de simulare financiară în care utilizatorul construiește o insulă virtuală. Folosește datele utilizatorului pentru a crea o Misiune Zilnică prietenoasă, legată de un obicei și de o mică economie posibilă azi. Oferă o recompensă virtuală tangibilă pentru insulă și estimează valoarea nominală a economiilor investite până la vârsta de 65 de ani, folosind orientativ un randament anual de 6% pentru Titluri de stat. Proiecția este o estimare, nu o garanție. Nu oferi prelegeri și nu inventa date despre utilizator.
-
-Returnează OBLIGATORIU un singur obiect JSON valid, fără markdown, fără backticks și fără text suplimentar, cu exact aceste chei și tipuri:
-questTitle (string), questStory (string), amountToSave (number, sumă propusă spre economisire azi în RON), virtualReward (string), futureRealValue (number, estimare în RON la 65 de ani), streakBonus (boolean, întotdeauna true).
-Răspunde DOAR cu obiectul JSON.
+Returnează un singur obiect JSON valid, fără markdown și fără text suplimentar, cu exact aceste chei și tipuri: questTitle (string), questStory (string), amountToSave (number în RON, pentru o zi), virtualReward (string), futureRealValue (number în RON, la 65 de ani), streakBonus (boolean, întotdeauna true). Răspunde DOAR cu JSON-ul.
 /no_think`;
 
 function extractJsonObject(text) {
-  for (let start = 0; start < text.length; start += 1) {
-    if (text[start] !== "{") continue;
+  const content = text.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
 
+  for (let start = 0; start < content.length; start += 1) {
+    if (content[start] !== "{") continue;
     let depth = 0;
     let inString = false;
     let escaped = false;
 
-    for (let index = start; index < text.length; index += 1) {
-      const character = text[index];
-
+    for (let index = start; index < content.length; index += 1) {
+      const character = content[index];
       if (inString) {
-        if (escaped) {
-          escaped = false;
-        } else if (character === "\\") {
-          escaped = true;
-        } else if (character === '"') {
-          inString = false;
-        }
+        if (escaped) escaped = false;
+        else if (character === "\\") escaped = true;
+        else if (character === '"') inString = false;
         continue;
       }
-
-      if (character === '"') {
-        inString = true;
-      } else if (character === "{") {
-        depth += 1;
-      } else if (character === "}") {
-        depth -= 1;
-        if (depth === 0) {
-          try {
-            const parsed = JSON.parse(text.slice(start, index + 1));
-            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-              return parsed;
-            }
-          } catch {
-            break;
-          }
+      if (character === '"') inString = true;
+      else if (character === "{") depth += 1;
+      else if (character === "}" && --depth === 0) {
+        try {
+          const value = JSON.parse(content.slice(start, index + 1));
+          if (value && typeof value === "object" && !Array.isArray(value)) return value;
+        } catch {
+          break;
         }
       }
     }
   }
 
-  throw new Error("Nu am putut extrage un obiect JSON valid din răspunsul LLM.");
+  throw new Error("Modelul nu a returnat un obiect JSON valid.");
 }
 
 function normalizeQuestResponse(parsed) {
-  const requiredStrings = ["questTitle", "questStory", "virtualReward"];
-  for (const key of requiredStrings) {
+  for (const key of ["questTitle", "questStory", "virtualReward"]) {
     if (typeof parsed[key] !== "string" || !parsed[key].trim()) {
-      throw new Error(`Răspunsul LLM nu conține un câmp valid: ${key}.`);
+      throw new Error(`Câmp invalid în răspunsul modelului: ${key}.`);
     }
   }
-
-  const amountToSave = Number(parsed.amountToSave);
-  const futureRealValue = Number(parsed.futureRealValue);
-  if (
-    !Number.isFinite(amountToSave) ||
-    amountToSave < 0 ||
-    !Number.isFinite(futureRealValue) ||
-    futureRealValue < 0
-  ) {
-    throw new Error("Răspunsul LLM conține valori numerice invalide.");
+  for (const key of ["amountToSave", "futureRealValue"]) {
+    if (typeof parsed[key] !== "number" || !Number.isFinite(parsed[key]) || parsed[key] < 0) {
+      throw new Error(`Câmp numeric invalid în răspunsul modelului: ${key}.`);
+    }
   }
-
   return {
     questTitle: parsed.questTitle.trim(),
     questStory: parsed.questStory.trim(),
-    amountToSave,
+    amountToSave: parsed.amountToSave,
     virtualReward: parsed.virtualReward.trim(),
-    futureRealValue,
-    streakBonus: true,
-  };
-}
-
-function buildFallbackResponse({ age, guiltyPleasure, monthlyGuiltyPleasureSpend }) {
-  const amountToSave = Math.round((monthlyGuiltyPleasureSpend / 60) * 100) / 100;
-  const monthsToInvest = Math.max(0, Math.floor((65 - age) * 12));
-  const monthlyRate = Math.pow(1.06, 1 / 12) - 1;
-  const monthlyContribution = amountToSave * 30;
-  const futureRealValue =
-    monthlyRate === 0
-      ? monthlyContribution * monthsToInvest
-      : monthlyContribution *
-        ((Math.pow(1 + monthlyRate, monthsToInvest) - 1) / monthlyRate);
-
-  return {
-    questTitle: "Misiunea de azi: O alegere pentru insula ta",
-    questStory: `Pune deoparte ${amountToSave} RON azi, reducând puțin cheltuielile pentru ${guiltyPleasure}. Economiile regulate pot crește în timp, dar rezultatul nu este garantat.`,
-    amountToSave,
-    virtualReward: "Oază cu palmieri",
-    futureRealValue: Math.round(futureRealValue),
+    futureRealValue: parsed.futureRealValue,
     streakBonus: true,
   };
 }
 
 // ─── POST /api/momentum ─────────────────────────────────────
+function createApp(llmClient = openai) {
+  const app = express();
+  app.use(cors());
+  app.use(express.json());
+
 app.post("/api/momentum", async (req, res) => {
-  const body = req.body || {};
-  const age = Number(body.age);
-  const monthlyIncome = Number(body.monthlyIncome);
-  const monthlyGuiltyPleasureSpend = Number(body.monthlyGuiltyPleasureSpend);
-  const guiltyPleasure =
-    typeof body.guiltyPleasure === "string" ? body.guiltyPleasure.trim() : "";
-
-  if (
-    !Number.isInteger(age) ||
-    age < 1 ||
-    age > 120 ||
-    !Number.isFinite(monthlyIncome) ||
-    monthlyIncome < 0 ||
-    !guiltyPleasure ||
-    !Number.isFinite(monthlyGuiltyPleasureSpend) ||
-    monthlyGuiltyPleasureSpend < 0
-  ) {
-    return res.status(400).json({
-      error:
-        "Trimite age (1-120), monthlyIncome, guiltyPleasure și monthlyGuiltyPleasureSpend cu valori valide.",
-    });
-  }
-
-  const input = {
-    age,
-    monthlyIncome,
-    guiltyPleasure,
-    monthlyGuiltyPleasureSpend,
-  };
-
   try {
-    if (!openai) {
-      throw new Error("API_KEY nu este configurată; se folosește fallback-ul local.");
+    // 1. Validare minimală
+    const { age, monthlyIncome, guiltyPleasure, monthlyGuiltyPleasureSpend } =
+      req.body;
+
+    if (
+      !Number.isInteger(age) ||
+      age < 1 ||
+      age > 120 ||
+      typeof monthlyIncome !== "number" ||
+      !Number.isFinite(monthlyIncome) ||
+      monthlyIncome < 0 ||
+      typeof guiltyPleasure !== "string" ||
+      !guiltyPleasure.trim() ||
+      typeof monthlyGuiltyPleasureSpend !== "number" ||
+      !Number.isFinite(monthlyGuiltyPleasureSpend) ||
+      monthlyGuiltyPleasureSpend < 0
+    ) {
+      return res.status(400).json({
+        error:
+          "Toate câmpurile sunt obligatorii: age, monthlyIncome, guiltyPleasure, monthlyGuiltyPleasureSpend",
+      });
     }
 
-    const userMessage = `
-Datele utilizatorului:
-- Vârstă: ${age} ani
-- Venit lunar: ${monthlyIncome} RON
-- Plăcere vinovată: ${guiltyPleasure}
-- Cheltuială lunară pe plăcerea vinovată: ${monthlyGuiltyPleasureSpend} RON
+    if (!llmClient) {
+      return res.status(503).json({
+        error: "LLM-ul nu este configurat. Verifică API_KEY în backend/.env.",
+      });
+    }
 
-Generează recomandarea financiară în format JSON.`.trim();
+    // 2. Construim mesajul utilizatorului pentru LLM
+    const userMessage = `Datele utilizatorului:
+  - Vârstă: ${age} ani
+  - Venit lunar: ${monthlyIncome} RON
+  - Obicei: ${guiltyPleasure}
+  - Cheltuială lunară pentru acest obicei: ${monthlyGuiltyPleasureSpend} RON
 
-  console.log("\n📥  Cerere de misiune primită.");
+  Generează misiunea Oasis în formatul JSON cerut.`;
 
-    const completion = await openai.chat.completions.create({
+    console.log(`\n📥  Cerere primită:`, { age, monthlyIncome, guiltyPleasure, monthlyGuiltyPleasureSpend });
+
+    // 3. Apel către Featherless AI (OpenAI-compatible)
+    const completion = await llmClient.chat.completions.create({
       model: MODEL_NAME,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
@@ -195,53 +147,52 @@ Generează recomandarea financiară în format JSON.`.trim();
     });
 
     const rawResponse = completion.choices[0]?.message?.content;
-    if (typeof rawResponse !== "string" || !rawResponse.trim()) {
+    console.log(`🤖  Răspuns brut LLM:\n`, rawResponse);
+
+    if (!rawResponse) {
       throw new Error("LLM-ul a returnat un răspuns gol.");
     }
 
-    const response = normalizeQuestResponse(extractJsonObject(rawResponse));
-
-    console.log(`✅  Răspuns trimis către frontend:`, response);
-    return res.json(response);
+    return res.json(normalizeQuestResponse(extractJsonObject(rawResponse)));
   } catch (err) {
     console.error(`\n❌  Eroare:`, err.message || err);
-
-    const fallbackResponse = buildFallbackResponse(input);
-    console.log("🔄  Misiune calculată local:", fallbackResponse);
-    return res.json(fallbackResponse);
+    return res.status(502).json({
+      error: "Nu am putut genera misiunea cu modelul AI. Verifică backendul și configurația Featherless, apoi încearcă din nou.",
+    });
   }
 });
 
-// ─── Health Check ────────────────────────────────────────────
-app.get("/", (req, res) => {
-  res.json({
-    status: "ok",
-    service: "Momentum API",
-    model: MODEL_NAME,
-    timestamp: new Date().toISOString(),
+  app.get("/", (req, res) => {
+    res.json({
+      status: "ok",
+      service: "Momentum API",
+      model: MODEL_NAME,
+      timestamp: new Date().toISOString(),
+    });
   });
-});
 
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok", model: MODEL_NAME });
 });
 
 // ─── Start Server ────────────────────────────────────────────
+  return app;
+}
+
+const app = createApp();
+
 if (require.main === module) {
   app.listen(PORT, () => {
-    console.log(`\n🚀  Momentum API rulează pe http://localhost:${PORT}`);
-    console.log(`📡  Model: ${MODEL_NAME}`);
-    console.log(`🔗  Base URL: ${BASE_URL}`);
-    if (!API_KEY) console.warn("⚠️  API_KEY lipsește; endpointul va folosi fallback-ul local.");
-    console.log(`\n📌  Endpoint: POST http://localhost:${PORT}/api/momentum`);
-    console.log(`📌  Health:   GET  http://localhost:${PORT}/api/health\n`);
+    console.log(`Momentum API rulează pe http://localhost:${PORT}`);
+    console.log(`Model: ${MODEL_NAME}`);
+    console.log(`LLM configurat: ${Boolean(openai)}`);
   });
 }
 
 module.exports = {
   app,
-  SYSTEM_PROMPT,
+  createApp,
   extractJsonObject,
   normalizeQuestResponse,
-  buildFallbackResponse,
+  SYSTEM_PROMPT,
 };

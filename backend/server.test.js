@@ -1,60 +1,115 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const {
-  buildFallbackResponse,
-  extractJsonObject,
-  normalizeQuestResponse,
-} = require("./server");
+const { createApp, extractJsonObject, normalizeQuestResponse } = require("./server");
 
-test("extracts a JSON object from surrounding model text", () => {
-  const parsed = extractJsonObject(
-    'Rezultatul misiunii: ```json\n{"questTitle":"Insula {verde}","questStory":"Pune deoparte 25 RON.","amountToSave":25,"virtualReward":"Casă pe Plajă","futureRealValue":12500,"streakBonus":true}\n```'
-  );
+const requestBody = {
+  age: 24,
+  monthlyIncome: 4000,
+  guiltyPleasure: "Comenzi Tazz",
+  monthlyGuiltyPleasureSpend: 400,
+};
 
-  assert.equal(parsed.questTitle, "Insula {verde}");
-  assert.equal(parsed.virtualReward, "Casă pe Plajă");
+const oasisResponse = {
+  questTitle: "Misiunea de azi",
+  questStory: "Pune deoparte o sumă mică pentru insula ta.",
+  amountToSave: 25,
+  virtualReward: "Casă pe Plajă",
+  futureRealValue: 12500,
+  streakBonus: true,
+};
+
+async function withServer(app, callback) {
+  const server = app.listen(0);
+  await new Promise((resolve) => server.once("listening", resolve));
+  const { port } = server.address();
+
+  try {
+    await callback(`http://127.0.0.1:${port}`);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+test("POST /api/momentum forwards user data and returns the Oasis contract", async () => {
+  let completionRequest;
+  const app = createApp({
+    chat: {
+      completions: {
+        create: async (request) => {
+          completionRequest = request;
+          return {
+            choices: [{ message: { content: JSON.stringify(oasisResponse) } }],
+          };
+        },
+      },
+    },
+  });
+
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/momentum`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestBody),
+    });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), oasisResponse);
+    assert.match(completionRequest.messages[1].content, /Comenzi Tazz/);
+  });
 });
 
-test("normalizes the exact Oasis response contract", () => {
-  const response = normalizeQuestResponse({
-    questTitle: "Misiunea de azi",
-    questStory: "Economisește pentru insula ta.",
-    amountToSave: 25,
-    virtualReward: "Casă pe Plajă",
-    futureRealValue: 12500,
-    streakBonus: false,
+test("invalid request data is rejected before calling the LLM", async () => {
+  let llmCalled = false;
+  const app = createApp({
+    chat: { completions: { create: async () => { llmCalled = true; } } },
   });
 
-  assert.deepEqual(response, {
-    questTitle: "Misiunea de azi",
-    questStory: "Economisește pentru insula ta.",
-    amountToSave: 25,
-    virtualReward: "Casă pe Plajă",
-    futureRealValue: 12500,
-    streakBonus: true,
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/momentum`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...requestBody, age: 0 }),
+    });
+
+    assert.equal(response.status, 400);
+    assert.equal(llmCalled, false);
   });
+});
+
+test("LLM errors are returned instead of a hardcoded mission", async () => {
+  const app = createApp({
+    chat: { completions: { create: async () => { throw new Error("provider unavailable"); } } },
+  });
+
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/momentum`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestBody),
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 502);
+    assert.equal(typeof payload.error, "string");
+    assert.equal("questTitle" in payload, false);
+  });
+});
+
+test("extracts JSON from surrounding model text and markdown", () => {
+  const parsed = extractJsonObject(
+    `Rezultat:\n\`\`\`json\n${JSON.stringify(oasisResponse)}\n\`\`\``
+  );
+
+  assert.deepEqual(parsed, oasisResponse);
+});
+
+test("normalizes the Oasis response and rejects missing fields", () => {
+  assert.deepEqual(
+    normalizeQuestResponse({ ...oasisResponse, streakBonus: false }),
+    oasisResponse,
+  );
   assert.throws(
     () => normalizeQuestResponse({ questTitle: "Incomplete" }),
-    /questStory/
+    /questStory/,
   );
-});
-
-test("fallback returns the Oasis contract with a future estimate", () => {
-  const response = buildFallbackResponse({
-    age: 24,
-    guiltyPleasure: "comenzi de mâncare",
-    monthlyGuiltyPleasureSpend: 400,
-  });
-
-  assert.deepEqual(Object.keys(response), [
-    "questTitle",
-    "questStory",
-    "amountToSave",
-    "virtualReward",
-    "futureRealValue",
-    "streakBonus",
-  ]);
-  assert.equal(response.amountToSave, 6.67);
-  assert.ok(response.futureRealValue > response.amountToSave);
-  assert.equal(response.streakBonus, true);
 });
