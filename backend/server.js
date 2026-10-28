@@ -30,6 +30,23 @@ const SYSTEM_PROMPT = `Ești Oasis, un Game Master pentru un joc de simulare fin
 Returnează un singur obiect JSON valid, fără markdown și fără text suplimentar, cu exact aceste chei și tipuri: questTitle (string), questStory (string), amountToSave (number în RON, pentru o zi), virtualReward (string), futureRealValue (number în RON, la 65 de ani), streakBonus (boolean, întotdeauna true). Răspunde DOAR cu JSON-ul.
 /no_think`;
 
+const OASIS_BANK_TRANSACTIONS = [
+  { date: "2026-10-19", merchant: "5 to go", amount: 20, category: "cafea" },
+  { date: "2026-10-20", merchant: "Starbucks", amount: 20, category: "cafea" },
+  { date: "2026-10-21", merchant: "5 to go", amount: 20, category: "cafea" },
+  { date: "2026-10-22", merchant: "Starbucks", amount: 20, category: "cafea" },
+  { date: "2026-10-23", merchant: "5 to go", amount: 20, category: "cafea" },
+  { date: "2026-10-24", merchant: "Starbucks", amount: 20, category: "cafea" },
+  { date: "2026-10-25", merchant: "Uber", amount: 38, category: "transport" },
+  { date: "2026-10-26", merchant: "Uber", amount: 32, category: "transport" },
+  { date: "2026-10-27", merchant: "Salariu", amount: 4000, category: "venit" },
+  { date: "2026-10-27", merchant: "Kaufland", amount: 185, category: "alimente" },
+];
+
+const OASIS_SYSTEM_PROMPT = `Ești un Game Master financiar. Analizează tranzacțiile primite. Găsește un obicei repetitiv și propune reducerea lui, nu eliminarea, iar suma economisită o transformă într-un upgrade pentru orașul virtual. Folosește doar informațiile din tranzacții și calculează corect sumele.
+
+Returnează OBLIGATORIU un singur obiect JSON valid, fără markdown și text suplimentar, cu exact aceste chei: questTitle (string, titlu jucăuș), analysisMessage (string, descrie cheltuielile observate și totalul), proposalMessage (string, propune reducerea obiceiului și recompensa), amountToSave (number în RON), virtualReward (string), rewardType (string, de exemplu building, decoration sau character).`;
+
 function extractJsonObject(text) {
   const content = text.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
 
@@ -84,11 +101,65 @@ function normalizeQuestResponse(parsed) {
   };
 }
 
+function normalizeOasisAnalysis(parsed) {
+  for (const key of ["questTitle", "analysisMessage", "proposalMessage", "virtualReward", "rewardType"]) {
+    if (typeof parsed[key] !== "string" || !parsed[key].trim()) {
+      throw new Error(`Câmp invalid în răspunsul Oasis: ${key}.`);
+    }
+  }
+  if (typeof parsed.amountToSave !== "number" || !Number.isFinite(parsed.amountToSave) || parsed.amountToSave < 0) {
+    throw new Error("Câmp numeric invalid în răspunsul Oasis: amountToSave.");
+  }
+
+  return {
+    questTitle: parsed.questTitle.trim(),
+    analysisMessage: parsed.analysisMessage.trim(),
+    proposalMessage: parsed.proposalMessage.trim(),
+    amountToSave: parsed.amountToSave,
+    virtualReward: parsed.virtualReward.trim(),
+    rewardType: parsed.rewardType.trim(),
+  };
+}
+
 // ─── POST /api/momentum ─────────────────────────────────────
 function createApp(llmClient = openai) {
   const app = express();
   app.use(cors());
   app.use(express.json());
+
+  app.post("/api/oasis", async (req, res) => {
+    if (!llmClient) {
+      return res.status(503).json({
+        error: "LLM-ul nu este configurat. Verifică API_KEY în backend/.env.",
+      });
+    }
+
+    const userMessage = `Tranzacțiile fictive ale utilizatorului (sume în RON):\n${JSON.stringify(OASIS_BANK_TRANSACTIONS, null, 2)}\n\nAnalizează tranzacțiile și generează misiunea folosind contractul JSON cerut.`;
+
+    try {
+      const completion = await llmClient.chat.completions.create({
+        model: MODEL_NAME,
+        messages: [
+          { role: "system", content: OASIS_SYSTEM_PROMPT },
+          { role: "user", content: userMessage },
+        ],
+        temperature: 0.2,
+        max_tokens: 700,
+        extra_body: { chat_template_kwargs: { enable_thinking: false } },
+      });
+      const rawResponse = completion.choices[0]?.message?.content;
+      if (typeof rawResponse !== "string" || !rawResponse.trim()) {
+        throw new Error("Modelul a returnat un răspuns gol.");
+      }
+
+      return res.json(normalizeOasisAnalysis(extractJsonObject(rawResponse)));
+    } catch (error) {
+      console.error("Eroare la generarea questului Oasis:", error.message || error);
+      return res.status(502).json({
+        error: "Nu am putut genera misiunea Oasis cu modelul AI. Încearcă din nou.",
+      });
+    }
+  });
 
 app.post("/api/momentum", async (req, res) => {
   try {
@@ -193,6 +264,9 @@ module.exports = {
   app,
   createApp,
   extractJsonObject,
+  normalizeOasisAnalysis,
   normalizeQuestResponse,
+  OASIS_BANK_TRANSACTIONS,
   SYSTEM_PROMPT,
+  OASIS_SYSTEM_PROMPT,
 };
