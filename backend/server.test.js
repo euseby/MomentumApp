@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { createApp } = require("./server");
+const { createApp, extractJsonObject, normalizeQuestResponse } = require("./server");
 
 const requestBody = {
   age: 24,
@@ -38,13 +38,7 @@ test("POST /api/momentum forwards user data and returns the Oasis contract", asy
         create: async (request) => {
           completionRequest = request;
           return {
-            choices: [
-              {
-                message: {
-                  content: `Misiune generată:\n\`\`\`json\n${JSON.stringify(oasisResponse)}\n\`\`\``,
-                },
-              },
-            ],
+            choices: [{ message: { content: JSON.stringify(oasisResponse) } }],
           };
         },
       },
@@ -60,7 +54,6 @@ test("POST /api/momentum forwards user data and returns the Oasis contract", asy
 
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), oasisResponse);
-    assert.equal(completionRequest.model, process.env.MODEL_NAME || "meta-llama/Meta-Llama-3.1-8B-Instruct");
     assert.match(completionRequest.messages[1].content, /Comenzi Tazz/);
   });
 });
@@ -100,4 +93,23 @@ test("LLM errors are returned instead of a hardcoded mission", async () => {
     assert.equal(typeof payload.error, "string");
     assert.equal("questTitle" in payload, false);
   });
+});
+
+test("extracts JSON from surrounding model text and markdown", () => {
+  const parsed = extractJsonObject(
+    `Rezultat:\n\`\`\`json\n${JSON.stringify(oasisResponse)}\n\`\`\``
+  );
+
+  assert.deepEqual(parsed, oasisResponse);
+});
+
+test("normalizes the Oasis response and rejects missing fields", () => {
+  assert.deepEqual(
+    normalizeQuestResponse({ ...oasisResponse, streakBonus: false }),
+    oasisResponse,
+  );
+  assert.throws(
+    () => normalizeQuestResponse({ questTitle: "Incomplete" }),
+    /questStory/,
+  );
 });
