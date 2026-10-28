@@ -1,6 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cityReducer, INITIAL_CITY, DEMO_QUEST, fetchOasis, isOasisQuest } from "@/lib/oasis";
 
+vi.mock("@/lib/supabase", () => ({
+  getSupabaseClient: () => ({
+    auth: {
+      getSession: async () => ({
+        data: { session: { access_token: "test-access-token" } },
+        error: null,
+      }),
+    },
+  }),
+}));
+
 afterEach(() => vi.unstubAllGlobals());
 describe("Oasis simulation", () => {
   it("starts with 5000 RON, level 1, and an intact city", () => {
@@ -42,7 +53,12 @@ describe("Oasis simulation", () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(DEMO_QUEST), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     expect(await fetchOasis()).toEqual({ data: DEMO_QUEST, mock: false });
-    expect(fetchMock).toHaveBeenCalledWith("/api/oasis", expect.objectContaining({ method: "POST", body: "{}", credentials: "include" }));
+    expect(fetchMock).toHaveBeenCalledWith("http://localhost:8000/api/oasis", expect.objectContaining({
+      method: "POST",
+      body: "{}",
+      credentials: "include",
+      headers: expect.objectContaining({ Authorization: "Bearer test-access-token" }),
+    }));
   });
   it("falls back for network errors and incompatible JSON", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));

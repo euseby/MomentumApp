@@ -1,3 +1,5 @@
+import { getSupabaseClient } from "@/lib/supabase";
+
 export interface OasisQuest {
   questTitle: string;
   analysisMessage: string;
@@ -7,7 +9,7 @@ export interface OasisQuest {
   rewardType?: string;
 }
 
-export const OASIS_API_URL = import.meta.env['VITE_OASIS_API_URL'] || "/api/oasis";
+export const OASIS_API_URL = import.meta.env["VITE_OASIS_API_URL"] || "http://localhost:8000/api/oasis";
 export const DEMO_QUEST: OasisQuest = {
   questTitle: "Operațiunea: Salvatorul de Cafea",
   analysisMessage: "Am observat că ai plătit 6 cafele săptămâna trecută (120 RON).",
@@ -28,9 +30,20 @@ export function isOasisQuest(value: unknown): value is OasisQuest {
 
 export async function fetchOasis(signal?: AbortSignal): Promise<{ data: OasisQuest; mock: boolean; reason?: string }> {
   try {
+    const supabase = getSupabaseClient();
+    const { data: sessionData, error: sessionError } = supabase
+      ? await supabase.auth.getSession()
+      : { data: { session: null }, error: null };
+    if (sessionError) throw sessionError;
+    if (!sessionData.session?.access_token) throw new Error("auth");
+
     const response = await fetch(OASIS_API_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        Authorization: `Bearer ${sessionData.session.access_token}`,
+      },
       credentials: "include",
       body: JSON.stringify({}),
       signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(12000)]) : AbortSignal.timeout(12000),

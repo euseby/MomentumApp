@@ -1,3 +1,5 @@
+import { getSupabaseClient } from "@/lib/supabase";
+
 export interface MomentumRequest {
   age: number;
   monthlyIncome: number;
@@ -35,9 +37,21 @@ export async function fetchMomentum(payload: MomentumRequest): Promise<OasisResp
   const timeout = setTimeout(() => ctrl.abort(), 20000);
 
   try {
+    const supabase = getSupabaseClient();
+    const { data: sessionData, error: sessionError } = supabase
+      ? await supabase.auth.getSession()
+      : { data: { session: null }, error: null };
+    if (sessionError) throw sessionError;
+    if (!sessionData.session?.access_token) {
+      throw new Error("Sesiunea a expirat. Autentifică-te din nou.");
+    }
+
     const res = await fetch(API_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${sessionData.session.access_token}`,
+      },
       body: JSON.stringify(payload),
       signal: ctrl.signal,
     });

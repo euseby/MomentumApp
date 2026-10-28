@@ -8,6 +8,7 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const OpenAI = require("openai");
+const { createClient } = require("@supabase/supabase-js");
 
 // ─── Config ──────────────────────────────────────────────────
 const PORT = process.env.PORT || 8000;
@@ -15,6 +16,8 @@ const API_KEY = process.env.API_KEY;
 const BASE_URL = process.env.BASE_URL || "https://api.featherless.ai/v1";
 const MODEL_NAME =
   process.env.MODEL_NAME || "meta-llama/Meta-Llama-3.1-8B-Instruct";
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 
 // ─── OpenAI client pointed at Featherless ────────────────────
 const openai = API_KEY
@@ -23,6 +26,49 @@ const openai = API_KEY
       baseURL: BASE_URL,
     })
   : null;
+
+const supabaseAuth = SUPABASE_URL && SUPABASE_ANON_KEY
+  ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    })
+  : null;
+
+async function verifySupabaseToken(token) {
+  if (!supabaseAuth) {
+    const error = new Error("Configurează SUPABASE_URL și SUPABASE_ANON_KEY în backend/.env.");
+    error.code = "SUPABASE_NOT_CONFIGURED";
+    throw error;
+  }
+
+  const { data, error } = await supabaseAuth.auth.getUser(token);
+  if (error) return null;
+  return data.user;
+}
+
+function requireAuth(tokenVerifier) {
+  return async (req, res, next) => {
+    const authorization = req.get("authorization") || "";
+    const match = authorization.match(/^Bearer\s+(.+)$/i);
+    if (!match) {
+      return res.status(401).json({ error: "Autentificarea este necesară." });
+    }
+
+    try {
+      const user = await tokenVerifier(match[1]);
+      if (!user) {
+        return res.status(401).json({ error: "Sesiunea nu este validă. Autentifică-te din nou." });
+      }
+      req.authUser = user;
+      return next();
+    } catch (error) {
+      if (error.code === "SUPABASE_NOT_CONFIGURED") {
+        return res.status(503).json({ error: error.message });
+      }
+      console.error("Eroare la verificarea sesiunii Supabase:", error.message || error);
+      return res.status(503).json({ error: "Serviciul de autentificare Supabase nu este disponibil." });
+    }
+  };
+}
 
 // ─── System Prompt (conform implementationplan.md) ───────────
 const SYSTEM_PROMPT = `Ești Oasis, un Game Master pentru un joc de simulare financiară în care utilizatorul construiește o insulă virtuală. Creează o Misiune Zilnică prietenoasă, legată de obiceiul și cheltuiala utilizatorului. Propune o economie realistă pentru azi și o recompensă virtuală tangibilă pe insulă. Estimează valoarea nominală la vârsta de 65 de ani presupunând că suma propusă este economisită zilnic și investită cu un randament orientativ de 6% pe an în titluri de stat. Menționează că proiecția este orientativă și nu garantată. Nu inventa date despre utilizator.
@@ -122,12 +168,12 @@ function normalizeOasisAnalysis(parsed) {
 }
 
 // ─── POST /api/momentum ─────────────────────────────────────
-function createApp(llmClient = openai) {
+function createApp(llmClient = openai, tokenVerifier = verifySupabaseToken) {
   const app = express();
   app.use(cors());
   app.use(express.json());
 
-  app.post("/api/oasis", async (req, res) => {
+  app.post("/api/oasis", requireAuth(tokenVerifier), async (req, res) => {
     if (!llmClient) {
       return res.status(503).json({
         error: "LLM-ul nu este configurat. Verifică API_KEY în backend/.env.",
@@ -161,7 +207,7 @@ function createApp(llmClient = openai) {
     }
   });
 
-app.post("/api/momentum", async (req, res) => {
+app.post("/api/momentum", requireAuth(tokenVerifier), async (req, res) => {
   try {
     // 1. Validare minimală
     const { age, monthlyIncome, guiltyPleasure, monthlyGuiltyPleasureSpend } =

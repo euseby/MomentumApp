@@ -24,6 +24,9 @@ const oasisResponse = {
   streakBonus: true,
 };
 
+const verifyTestToken = async (token) =>
+  token === "valid-test-token" ? { id: "test-user" } : null;
+
 async function withServer(app, callback) {
   const server = app.listen(0);
   await new Promise((resolve) => server.once("listening", resolve));
@@ -49,12 +52,15 @@ test("POST /api/momentum forwards user data and returns the Oasis contract", asy
         },
       },
     },
-  });
+  }, verifyTestToken);
 
   await withServer(app, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/momentum`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer valid-test-token",
+      },
       body: JSON.stringify(requestBody),
     });
 
@@ -68,12 +74,15 @@ test("invalid request data is rejected before calling the LLM", async () => {
   let llmCalled = false;
   const app = createApp({
     chat: { completions: { create: async () => { llmCalled = true; } } },
-  });
+  }, verifyTestToken);
 
   await withServer(app, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/momentum`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer valid-test-token",
+      },
       body: JSON.stringify({ ...requestBody, age: 0 }),
     });
 
@@ -85,12 +94,15 @@ test("invalid request data is rejected before calling the LLM", async () => {
 test("LLM errors are returned instead of a hardcoded mission", async () => {
   const app = createApp({
     chat: { completions: { create: async () => { throw new Error("provider unavailable"); } } },
-  });
+  }, verifyTestToken);
 
   await withServer(app, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/momentum`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer valid-test-token",
+      },
       body: JSON.stringify(requestBody),
     });
     const payload = await response.json();
@@ -139,10 +151,13 @@ test("POST /api/oasis sends ten transactions and returns the shared contract", a
         },
       },
     },
-  });
+  }, verifyTestToken);
 
   await withServer(app, async (baseUrl) => {
-    const response = await fetch(`${baseUrl}/api/oasis`, { method: "POST" });
+    const response = await fetch(`${baseUrl}/api/oasis`, {
+      method: "POST",
+      headers: { Authorization: "Bearer valid-test-token" },
+    });
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), analysis);
     assert.equal(OASIS_BANK_TRANSACTIONS.length, 10);
@@ -173,4 +188,21 @@ test("Oasis contract rejects responses without rewardType", () => {
     }),
     /rewardType/,
   );
+});
+
+test("AI endpoints reject missing or invalid Supabase tokens", async () => {
+  const app = createApp(null, verifyTestToken);
+
+  await withServer(app, async (baseUrl) => {
+    for (const path of ["/api/momentum", "/api/oasis"]) {
+      const missingToken = await fetch(`${baseUrl}${path}`, { method: "POST" });
+      assert.equal(missingToken.status, 401, `${path} should reject missing token`);
+
+      const invalidToken = await fetch(`${baseUrl}${path}`, {
+        method: "POST",
+        headers: { Authorization: "Bearer invalid-test-token" },
+      });
+      assert.equal(invalidToken.status, 401, `${path} should reject invalid token`);
+    }
+  });
 });

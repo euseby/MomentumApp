@@ -1,13 +1,17 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import { ArrowDownLeft, ArrowUpRight, Check, ChevronRight, Coffee, Coins, Leaf, LoaderCircle, RefreshCw, ShieldCheck, Sparkles, TriangleAlert, Wallet } from "lucide-react";
+import { useNavigate } from "@tanstack/react-router";
+import { ArrowDownLeft, ArrowUpRight, Check, ChevronRight, Coffee, Coins, Leaf, LoaderCircle, LogOut, RefreshCw, ShieldCheck, Sparkles, TriangleAlert, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/components/ui/alert-dialog";
 import { cityReducer, INITIAL_CITY, DEMO_QUEST, fetchOasis, rewardSymbol } from "@/lib/oasis";
+import { useAuth } from "@/lib/auth-context";
 import island from "@/assets/oasis-island.jpg";
 
 const ron = (value: number) => new Intl.NumberFormat("ro-RO", { maximumFractionDigits: 2 }).format(value) + " RON";
 
 export function OasisDashboard() {
+  const navigate = useNavigate();
+  const { session, isLoading: authLoading, signOut } = useAuth();
   const [city, dispatch] = useReducer(cityReducer, INITIAL_CITY);
   const [questData, setQuestData] = useState(DEMO_QUEST);
   const [loading, setLoading] = useState(true);
@@ -28,7 +32,17 @@ export function OasisDashboard() {
     } catch { /* An unmounted or superseded request must not change the dashboard. */ }
     finally { if (!controller.signal.aborted) setLoading(false); }
   }, []);
-  useEffect(() => { void loadQuest(); return () => request.current?.abort(); }, [loadQuest]);
+  useEffect(() => {
+    if (!authLoading && !session) void navigate({ to: "/login", replace: true });
+  }, [authLoading, navigate, session]);
+  useEffect(() => {
+    if (!session) return;
+    void loadQuest();
+    return () => request.current?.abort();
+  }, [loadQuest, session]);
+  if (authLoading || !session) {
+    return <main className="grid min-h-screen place-items-center bg-background text-sm font-semibold text-muted-foreground">Verificăm sesiunea...</main>;
+  }
   const latestReward = city.rewards.at(-1);
   const cityName = city.isRuined ? "Oraș Abandonat" : city.cityLevel === 1 ? "Cort pe plajă" : latestReward || "Oaza ta";
   const insufficient = questData.amountToSave > city.simulatedBalance;
@@ -38,7 +52,20 @@ export function OasisDashboard() {
       <header className="border-b border-border">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-5 sm:px-8">
           <div className="flex items-center gap-3"><span className="grid size-10 place-items-center rounded-lg bg-primary/10 text-primary"><Leaf /></span><span className="text-2xl font-extrabold">Oasis<span className="text-primary">.</span></span></div>
-          <div className="flex items-center gap-2 rounded-full border border-border px-3 py-1.5 text-xs text-muted-foreground"><span className="size-1.5 rounded-full bg-neon" />Simulare financiară</div>
+          <div className="flex items-center gap-3">
+            <span className="hidden max-w-48 truncate text-xs text-muted-foreground sm:block">{session.user.email}</span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={async () => {
+                await signOut();
+                await navigate({ to: "/login", replace: true });
+              }}
+            >
+              <LogOut />Deconectare
+            </Button>
+            <div className="flex items-center gap-2 rounded-full border border-border px-3 py-1.5 text-xs text-muted-foreground"><span className="size-1.5 rounded-full bg-neon" />Simulare financiară</div>
+          </div>
         </div>
       </header>
       <main className="mx-auto max-w-7xl px-5 pb-10 pt-8 sm:px-8">

@@ -1,6 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchMomentum, projectValue } from "@/lib/momentum";
 
+vi.mock("@/lib/supabase", () => ({
+  getSupabaseClient: () => ({
+    auth: {
+      getSession: async () => ({
+        data: { session: { access_token: "test-access-token" } },
+        error: null,
+      }),
+    },
+  }),
+}));
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe("projectValue", () => {
@@ -18,7 +29,8 @@ describe("fetchMomentum", () => {
       futureRealValue: 12500,
       streakBonus: true,
     };
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => quest }));
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => quest });
+    vi.stubGlobal("fetch", fetchMock);
 
     await expect(
       fetchMomentum({
@@ -28,6 +40,12 @@ describe("fetchMomentum", () => {
         monthlyGuiltyPleasureSpend: 400,
       }),
     ).resolves.toEqual(quest);
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer test-access-token" }),
+      }),
+    );
   });
 
   it("surfaces backend errors instead of showing mock data", async () => {
