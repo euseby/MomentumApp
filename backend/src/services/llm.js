@@ -78,6 +78,15 @@ function normalizeOasisAnalysis(parsed) {
   };
 }
 
+function stripNumericClaims(value) {
+  return value
+    .replace(/(?:\b(?:RON|lei)\s*)?\d[\d.,]*(?:\s*(?:RON|lei|%))?/gi, "")
+    .replace(/\b(?:RON|lei)\b/gi, "")
+    .replace(/\s+([,.;!?])/g, "$1")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 function normalizeQuestCopy(parsed, { requireStory = false } = {}) {
   if (typeof parsed.questTitle !== "string" || !parsed.questTitle.trim()) {
     throw new Error("Câmp invalid în răspunsul modelului: questTitle.");
@@ -85,15 +94,12 @@ function normalizeQuestCopy(parsed, { requireStory = false } = {}) {
   if (requireStory && (typeof parsed.questStory !== "string" || !parsed.questStory.trim())) {
     throw new Error("Câmp invalid în răspunsul modelului: questStory.");
   }
-  if (/\d/.test(parsed.questTitle) || (requireStory && /\d/.test(parsed.questStory))) {
-    throw new Error("Textul modelului nu poate conține numere calculate de AI.");
-  }
   if (typeof parsed.rewardId !== "string" || !shop.some((item) => item.id === parsed.rewardId)) {
     throw new Error("Modelul a ales o recompensă care nu există în catalog.");
   }
   return {
-    questTitle: parsed.questTitle.trim(),
-    ...(requireStory ? { questStory: parsed.questStory.trim() } : {}),
+    questTitle: stripNumericClaims(parsed.questTitle),
+    ...(requireStory ? { questStory: stripNumericClaims(parsed.questStory) } : {}),
     reward: shop.find((item) => item.id === parsed.rewardId),
   };
 }
@@ -130,5 +136,6 @@ module.exports = {
   normalizeQuestResponse,
   normalizeOasisAnalysis,
   normalizeQuestCopy,
+  stripNumericClaims,
   requestQuestCopy,
 };

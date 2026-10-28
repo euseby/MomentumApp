@@ -81,6 +81,11 @@ export interface BananaChallenge {
   sender?: Pick<Friend, "id" | "displayName" | "handle">;
 }
 
+export interface StripeConfig {
+  stripeEnabled: boolean;
+  mockEnabled: boolean;
+}
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ||
   (import.meta.env.DEV ? "http://localhost:8000" : "");
 
@@ -196,4 +201,21 @@ export function cleanBanana(challengeId: string, amountRon: number, destinationI
 
 export function deleteUserData(demoUserId: string): Promise<{ deleted: boolean }> {
   return requestJson("/api/me/data", demoUserId, { method: "DELETE" });
+}
+
+export function getStripeConfig(): Promise<StripeConfig> {
+  return requestJson("/api/stripe/config", "demo-ioana", { method: "GET" });
+}
+
+export function createStripeCheckout(amountRon: number, demoUserId: string): Promise<{ url: string; sessionId: string }> {
+  return requestJson("/api/stripe/checkout", demoUserId, { method: "POST", body: JSON.stringify({ amountRon }) });
+}
+
+export function confirmStripeCheckout(sessionId: string, demoUserId: string): Promise<{ confirmed: boolean; balances: WalletData["balances"] }> {
+  const query = new URLSearchParams({ session_id: sessionId });
+  return requestJson(`/api/stripe/confirm?${query}`, demoUserId, { method: "GET" });
+}
+
+export function mockStripeTopUp(amountRon: number, idempotencyKey: string, demoUserId: string): Promise<{ confirmed: boolean; simulated: boolean; balances: WalletData["balances"] }> {
+  return requestJson("/api/stripe/mock-topup", demoUserId, { method: "POST", body: JSON.stringify({ amountRon, idempotencyKey }) });
 }

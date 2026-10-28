@@ -2,6 +2,7 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const OpenAI = require("openai");
+const Stripe = require("stripe");
 const { repository } = require("./src/repo");
 const { createCoreRouter } = require("./src/routes/core");
 const { createQuestsRouter } = require("./src/routes/quests");
@@ -9,6 +10,7 @@ const { createStatementsRouter } = require("./src/routes/statements");
 const { createQuestActionsRouter } = require("./src/routes/quest-actions");
 const { createProjectionRouter } = require("./src/routes/projection");
 const { createSocialRouter } = require("./src/routes/social");
+const { createStripeRouter } = require("./src/routes/stripe");
 const llm = require("./src/services/llm");
 const { getCurrentUser } = require("./src/services/current-user");
 const { addLedgerEntry, getWalletBalances } = require("./src/services/ledger");
@@ -23,8 +25,11 @@ const CORS_ORIGINS = (process.env.CORS_ORIGINS || "http://localhost:8080,http://
 const openai = process.env.API_KEY
   ? new OpenAI({ apiKey: process.env.API_KEY, baseURL: BASE_URL })
   : null;
+const stripeClient = process.env.STRIPE_SECRET_KEY
+  ? new Stripe(process.env.STRIPE_SECRET_KEY)
+  : null;
 
-function createApp(llmClient = openai, activeRepository = repository) {
+function createApp(llmClient = openai, activeRepository = repository, stripeClientOverride = stripeClient) {
   const app = express();
   app.use(cors({
     origin(origin, callback) {
@@ -45,6 +50,7 @@ function createApp(llmClient = openai, activeRepository = repository) {
   app.use(createQuestActionsRouter(activeRepository));
   app.use(createProjectionRouter(activeRepository));
   app.use(createSocialRouter(activeRepository));
+  app.use(createStripeRouter(activeRepository, stripeClientOverride));
   return app;
 }
 

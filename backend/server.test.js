@@ -667,3 +667,76 @@ test("friends endpoints resolve invite codes and allow receiver-controlled mute"
     assert.equal((await muted.json()).muted, true);
   });
 });
+
+test("Stripe demo top-up is idempotent and only changes simulated RON", async () => {
+  const repo = createMemoryRepository();
+  const app = createApp(null, repo);
+
+  await withServer(app, async (baseUrl) => {
+    const configResponse = await fetch(`${baseUrl}/api/stripe/config`);
+    assert.deepEqual(await configResponse.json(), { stripeEnabled: false, mockEnabled: true });
+
+    const topup = () => fetch(`${baseUrl}/api/stripe/mock-topup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-demo-user": "demo-ioana" },
+      body: JSON.stringify({ amountRon: 100, idempotencyKey: "checkout-demo-1" }),
+    });
+    const first = await topup();
+    assert.equal(first.status, 200);
+    assert.deepEqual((await first.json()).balances, { RON_SIM: 5100, CREDITS: 0 });
+    assert.equal((await topup()).status, 200);
+    assert.equal(await repo.getBalance("demo-ioana", "RON_SIM"), 5100);
+    assert.equal(await repo.getBalance("demo-ioana", "CREDITS"), 0);
+
+    const invalid = await fetch(`${baseUrl}/api/stripe/mock-topup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-demo-user": "demo-ioana" },
+      body: JSON.stringify({ amountRon: 55, idempotencyKey: "invalid-amount" }),
+    });
+    assert.equal(invalid.status, 400);
+  });
+});
+
+test("Stripe test checkout confirms server-side and credits only RON_SIM once", async () => {
+  const repo = createMemoryRepository();
+  let createdSession;
+  let checkoutRequest;
+  const stripe = {
+    checkout: {
+      sessions: {
+        create: async (request) => {
+          checkoutRequest = request;
+          createdSession = {
+            id: "cs_test_oasis_1",
+            url: "https://checkout.stripe.test/session",
+            payment_status: "paid",
+            metadata: request.metadata,
+          };
+          return createdSession;
+        },
+        retrieve: async (id) => id === createdSession.id ? createdSession : null,
+      },
+    },
+  };
+  const app = createApp(null, repo, stripe);
+
+  await withServer(app, async (baseUrl) => {
+    const checkout = await fetch(`${baseUrl}/api/stripe/checkout`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-demo-user": "demo-radu" },
+      body: JSON.stringify({ amountRon: 100 }),
+    });
+    assert.equal(checkout.status, 200);
+    assert.equal((await checkout.json()).url, "https://checkout.stripe.test/session");
+    assert.equal(checkoutRequest.line_items[0].price_data.currency, "ron");
+    assert.equal(checkoutRequest.line_items[0].price_data.unit_amount, 10000);
+    assert.equal(checkoutRequest.metadata.currency, "RON_SIM");
+
+    const confirmUrl = `${baseUrl}/api/stripe/confirm?session_id=cs_test_oasis_1`;
+    const headers = { "x-demo-user": "demo-radu" };
+    assert.equal((await fetch(confirmUrl, { headers })).status, 200);
+    assert.equal((await fetch(confirmUrl, { headers })).status, 200);
+    assert.equal(await repo.getBalance("demo-radu", "RON_SIM"), 5100);
+    assert.equal(await repo.getBalance("demo-radu", "CREDITS"), 0);
+  });
+});
