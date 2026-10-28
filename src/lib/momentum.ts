@@ -23,7 +23,7 @@ export const MOCK_RESPONSE: MomentumResponse = {
   confidenceScore: 85,
 };
 function isValid(d: unknown): d is MomentumResponse {
-  const o = d as Record<string, unknown>;
+  const o = d as Partial<Record<keyof MomentumResponse, unknown>>;
   return !!o && typeof o.habitToChange === "string" && typeof o.monthlySavings === "number" &&
     typeof o.futureValueAt65 === "number" && typeof o.investmentVehicle === "string" &&
     typeof o.actionMessage === "string" && typeof o.confidenceScore === "number";
