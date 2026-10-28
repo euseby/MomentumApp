@@ -56,6 +56,31 @@ export interface QuestAcceptance {
   streak: number;
 }
 
+export interface ShopItem {
+  id: string;
+  name: string;
+  type: "building" | "decoration" | "character" | "action";
+  priceCredits: number;
+  sprite: string;
+}
+
+export interface Friend {
+  id: string;
+  displayName: string;
+  handle: string;
+  inviteCode: string;
+}
+
+export interface BananaChallenge {
+  id: string;
+  fromUser: string;
+  toUser: string;
+  blockedPlot: string;
+  minInvestRon: number;
+  expiresAt: string;
+  sender?: Pick<Friend, "id" | "displayName" | "handle">;
+}
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ||
   (import.meta.env.DEV ? "http://localhost:8000" : "");
 
@@ -117,6 +142,48 @@ export function acceptQuest(questId: string, destinationId: string, demoUserId: 
 export function getProjections(weeklySaving: number, age: number, demoUserId: string): Promise<{ projections: ProjectionValue[] }> {
   const query = new URLSearchParams({ weeklySaving: String(weeklySaving), age: String(age) });
   return requestJson(`/api/projection?${query}`, demoUserId, { method: "GET" });
+}
+
+export function getShop(demoUserId: string): Promise<ShopItem[]> {
+  return requestJson("/api/shop", demoUserId, { method: "GET" });
+}
+
+export function buyShopItem(itemId: string, idempotencyKey: string, demoUserId: string): Promise<{ item: WalletData["inventory"][number]; creditsBalance: number }> {
+  return requestJson("/api/shop/buy", demoUserId, { method: "POST", body: JSON.stringify({ itemId, idempotencyKey }) });
+}
+
+export function placeInventoryItem(itemId: string, plotId: string, demoUserId: string): Promise<WalletData["inventory"][number]> {
+  return requestJson("/api/inventory/place", demoUserId, { method: "POST", body: JSON.stringify({ itemId, plotId }) });
+}
+
+export function getFriends(demoUserId: string): Promise<Friend[]> {
+  return requestJson("/api/friends", demoUserId, { method: "GET" });
+}
+
+export function addFriend(lookup: { handle?: string; inviteCode?: string } | string, demoUserId: string): Promise<Friend> {
+  const body = typeof lookup === "string"
+    ? (/^[A-Z0-9]{6,}$/.test(lookup) && /\d/.test(lookup) ? { inviteCode: lookup.toUpperCase() } : { handle: lookup.replace(/^@/, "").toLowerCase() })
+    : lookup;
+  return requestJson("/api/friends/add", demoUserId, { method: "POST", body: JSON.stringify(body) });
+}
+
+export function muteFriend(friendId: string, muted: boolean, demoUserId: string): Promise<{ muted: boolean }> {
+  return requestJson(`/api/friends/${encodeURIComponent(friendId)}/mute`, demoUserId, { method: "POST", body: JSON.stringify({ muted }) });
+}
+
+export function sendBanana(toUserId: string, demoUserId: string): Promise<{ challenge: BananaChallenge; creditsBalance: number }> {
+  return requestJson("/api/friends/banana", demoUserId, { method: "POST", body: JSON.stringify({ toUserId }) });
+}
+
+export function getInbox(demoUserId: string): Promise<BananaChallenge[]> {
+  return requestJson("/api/inbox", demoUserId, { method: "GET" });
+}
+
+export function cleanBanana(challengeId: string, amountRon: number, destinationId: string, demoUserId: string) {
+  return requestJson(`/api/challenges/${encodeURIComponent(challengeId)}/clean`, demoUserId, {
+    method: "POST",
+    body: JSON.stringify({ amountRon, destinationId }),
+  });
 }
 
 export function deleteUserData(demoUserId: string): Promise<{ deleted: boolean }> {

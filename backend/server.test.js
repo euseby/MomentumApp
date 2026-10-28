@@ -493,3 +493,172 @@ test("GET /api/projection returns all destinations and filters a selected one", 
     assert.equal((await fetch(`${baseUrl}/api/projection?weeklySaving=40&age=24&destinationId=unknown`, { headers })).status, 400);
   });
 });
+
+test("shop purchases debit credits idempotently and plots cannot be double occupied", async () => {
+  const repo = createMemoryRepository();
+  const app = createApp(null, repo);
+  await addLedgerEntry(repo, {
+    userId: "demo-ioana", currency: "CREDITS", amount: 100,
+    kind: "test_credit", refType: "test", refId: "seed", idempotencyKey: "shop-test-credit",
+  });
+
+  await withServer(app, async (baseUrl) => {
+    const buy = () => fetch(`${baseUrl}/api/shop/buy`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-demo-user": "demo-ioana" },
+      body: JSON.stringify({ itemId: "pisica", idempotencyKey: "cat-purchase-1" }),
+    });
+    const first = await buy();
+    assert.equal(first.status, 201);
+    assert.equal((await first.json()).creditsBalance, 75);
+    assert.equal((await buy()).status, 201);
+    assert.equal(await repo.getBalance("demo-ioana", "CREDITS"), 75);
+    assert.equal((await repo.listInventory("demo-ioana")).length, 1);
+
+    const cat = (await repo.listInventory("demo-ioana"))[0];
+    const place = (itemId) => fetch(`${baseUrl}/api/inventory/place`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-demo-user": "demo-ioana" },
+      body: JSON.stringify({ itemId, plotId: "plot-1" }),
+    });
+    assert.equal((await place(cat.id)).status, 200);
+    await addLedgerEntry(repo, {
+      userId: "demo-ioana", currency: "CREDITS", amount: 15,
+      kind: "test_credit", refType: "test", refId: "seed-2", idempotencyKey: "shop-test-credit-2",
+    });
+    const palm = await fetch(`${baseUrl}/api/shop/buy`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-demo-user": "demo-ioana" },
+      body: JSON.stringify({ itemId: "palmier", idempotencyKey: "palm-purchase-1" }),
+    });
+    assert.equal(palm.status, 201);
+    const palmItem = (await palm.json()).item;
+    assert.equal((await place(palmItem.id)).status, 409);
+  });
+});
+
+test("banana is friends-only, costs 40 credits, and one active challenge blocks repeats", async () => {
+  const repo = createMemoryRepository();
+  await addLedgerEntry(repo, {
+    userId: "demo-ioana", currency: "CREDITS", amount: 120,
+    kind: "test_credit", refType: "test", refId: "banana-seed", idempotencyKey: "banana-test-credit",
+  });
+  const app = createApp(null, repo);
+
+  await withServer(app, async (baseUrl) => {
+    const send = (toUserId) => fetch(`${baseUrl}/api/friends/banana`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-demo-user": "demo-ioana" },
+      body: JSON.stringify({ toUserId }),
+    });
+    assert.equal((await send("demo-ioana")).status, 400);
+    const sent = await send("demo-radu");
+    assert.equal(sent.status, 201);
+    const challenge = (await sent.json()).challenge;
+    assert.equal(challenge.blockedPlot, "plot-1");
+    assert.equal(await repo.getBalance("demo-ioana", "CREDITS"), 80);
+    assert.equal((await send("demo-radu")).status, 409);
+
+    const inbox = await fetch(`${baseUrl}/api/inbox`, { headers: { "x-demo-user": "demo-radu" } });
+    assert.equal((await inbox.json()).length, 1);
+    const tooSmall = await fetch(`${baseUrl}/api/challenges/${challenge.id}/clean`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-demo-user": "demo-radu" },
+      body: JSON.stringify({ destinationId: "fidelis", amountRon: 19 }),
+    });
+    assert.equal(tooSmall.status, 400);
+    const cleaned = await fetch(`${baseUrl}/api/challenges/${challenge.id}/clean`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-demo-user": "demo-radu" },
+      body: JSON.stringify({ destinationId: "fidelis", amountRon: 20 }),
+    });
+    assert.equal(cleaned.status, 200);
+    assert.equal(await repo.getBalance("demo-radu", "RON_SIM"), 4980);
+    assert.equal(await repo.getBalance("demo-radu", "CREDITS"), 10);
+    assert.equal(await repo.getBalance("demo-ioana", "CREDITS"), 90);
+    assert.equal((await repo.listInvestments("demo-radu")).length, 1);
+    const retry = await fetch(`${baseUrl}/api/challenges/${challenge.id}/clean`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-demo-user": "demo-radu" },
+      body: JSON.stringify({ destinationId: "fidelis", amountRon: 20 }),
+    });
+    assert.equal((await retry.json()).alreadyCleaned, true);
+    assert.equal(await repo.getBalance("demo-radu", "CREDITS"), 10);
+  });
+});
+
+test("banana mute, daily limit, and expiration are enforced", async () => {
+  const mutedRepo = createMemoryRepository();
+  await addLedgerEntry(mutedRepo, {
+    userId: "demo-ioana", currency: "CREDITS", amount: 40,
+    kind: "test_credit", refType: "test", refId: "mute-seed", idempotencyKey: "mute-credit",
+  });
+  await mutedRepo.setMute("demo-radu", "demo-ioana", true);
+  const mutedApp = createApp(null, mutedRepo);
+  await withServer(mutedApp, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/friends/banana`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-demo-user": "demo-ioana" },
+      body: JSON.stringify({ toUserId: "demo-radu" }),
+    });
+    assert.equal(response.status, 403);
+    assert.equal(await mutedRepo.getBalance("demo-ioana", "CREDITS"), 40);
+  });
+
+  const limitedRepo = createMemoryRepository();
+  await addLedgerEntry(limitedRepo, {
+    userId: "demo-ioana", currency: "CREDITS", amount: 200,
+    kind: "test_credit", refType: "test", refId: "limit-seed", idempotencyKey: "limit-credit",
+  });
+  for (let index = 0; index < 3; index += 1) {
+    await limitedRepo.createChallenge({
+      fromUser: "demo-ioana", toUser: "demo-radu", kind: "banana", blockedPlot: `old-${index}`,
+      minInvestRon: 20, expiresAt: new Date(Date.now() - 1000).toISOString(), status: "expired",
+    });
+  }
+  const limitedApp = createApp(null, limitedRepo);
+  await withServer(limitedApp, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/friends/banana`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-demo-user": "demo-ioana" },
+      body: JSON.stringify({ toUserId: "demo-radu" }),
+    });
+    assert.equal(response.status, 429);
+    assert.equal(await limitedRepo.getBalance("demo-ioana", "CREDITS"), 200);
+    const expired = await limitedRepo.createChallenge({
+      fromUser: "demo-ioana", toUser: "demo-radu", kind: "banana", blockedPlot: "plot-1",
+      minInvestRon: 20, expiresAt: new Date(Date.now() - 1000).toISOString(), status: "pending",
+    });
+    const inbox = await fetch(`${baseUrl}/api/inbox`, { headers: { "x-demo-user": "demo-radu" } });
+    assert.equal((await inbox.json()).length, 0);
+    assert.equal((await limitedRepo.listChallenges("demo-radu", { direction: "incoming" })).find((item) => item.id === expired.id).status, "expired");
+  });
+});
+
+test("friends endpoints resolve invite codes and allow receiver-controlled mute", async () => {
+  const repo = createMemoryRepository();
+  const app = createApp(null, repo);
+
+  await withServer(app, async (baseUrl) => {
+    const friendsResponse = await fetch(`${baseUrl}/api/friends`, {
+      headers: { "x-demo-user": "demo-ioana" },
+    });
+    assert.equal((await friendsResponse.json())[0].id, "demo-radu");
+
+    const added = await fetch(`${baseUrl}/api/friends/add`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-demo-user": "demo-ioana" },
+      body: JSON.stringify({ inviteCode: "RADU24" }),
+    });
+    assert.equal(added.status, 201);
+    assert.equal((await added.json()).handle, "radu");
+
+    const muted = await fetch(`${baseUrl}/api/friends/demo-ioana/mute`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-demo-user": "demo-radu" },
+      body: JSON.stringify({ muted: true }),
+    });
+    assert.equal(muted.status, 200);
+    assert.equal((await muted.json()).muted, true);
+  });
+});

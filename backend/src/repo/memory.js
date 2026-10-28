@@ -57,6 +57,12 @@ function createMemoryRepository() {
       return clone(user || null);
     },
 
+    async getUserByInviteCode(inviteCode) {
+      const code = String(inviteCode || "").toUpperCase();
+      const user = [...state.users.values()].find((entry) => entry.inviteCode === code);
+      return clone(user || null);
+    },
+
     async saveStatement(userId, meta) {
       requireUser(userId);
       const statement = {
@@ -180,6 +186,10 @@ function createMemoryRepository() {
 
     async addInventoryItem(userId, item) {
       requireUser(userId);
+      if (item.idempotencyKey) {
+        const existing = state.inventory.find((entry) => entry.userId === userId && entry.idempotencyKey === item.idempotencyKey);
+        if (existing) return clone(existing);
+      }
       const created = { ...clone(item), id: randomUUID(), userId, placedPlot: null, acquiredAt: new Date().toISOString() };
       state.inventory.push(created);
       return clone(created);

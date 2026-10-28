@@ -3,10 +3,14 @@ import { ArrowDownLeft, ArrowUpRight, Check, ChevronRight, Coffee, Coins, Leaf, 
 import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/components/ui/alert-dialog";
 import { cityReducer, INITIAL_CITY, rewardSymbol, type OasisQuest } from "@/lib/oasis";
-import { acceptQuest, generateQuest, getInsights, getProjections, getWallet, importDemoStatement, uploadStatement, type InsightsData, type ProjectionValue, type WalletData } from "@/lib/api";
+import { acceptQuest, addFriend, buyShopItem, cleanBanana, generateQuest, getFriends, getInbox, getInsights, getProjections, getShop, getWallet, importDemoStatement, muteFriend, placeInventoryItem, sendBanana, uploadStatement, type BananaChallenge, type Friend, type InsightsData, type ProjectionValue, type ShopItem, type WalletData } from "@/lib/api";
 import { StatementUpload } from "@/components/statement-upload";
 import { InsightsPanel } from "@/components/insights-panel";
 import { ProjectionChart } from "@/components/projection-chart";
+import { Shop } from "@/components/shop";
+import { FriendsPanel } from "@/components/friends-panel";
+import { BananaInbox } from "@/components/banana-inbox";
+import { ISLAND_PLOTS } from "@/lib/plots";
 import island from "@/assets/oasis-island.jpg";
 
 const ron = (value: number) => new Intl.NumberFormat("ro-RO", { maximumFractionDigits: 2 }).format(value) + " RON";
@@ -18,7 +22,13 @@ export function OasisDashboard() {
   const [insights, setInsights] = useState<InsightsData | null>(null);
   const [wallet, setWallet] = useState<WalletData | null>(null);
   const [projections, setProjections] = useState<ProjectionValue[]>([]);
+  const [shopItems, setShopItems] = useState<ShopItem[]>([]);
+  const [friends, setFriends] = useState<Friend[]>([]);
+  const [inbox, setInbox] = useState<BananaChallenge[]>([]);
+  const [socialBusy, setSocialBusy] = useState(false);
   const [destinationId, setDestinationId] = useState("fidelis");
+  const [selectedPlotId, setSelectedPlotId] = useState("plot-1");
+  const [selectedInventoryId, setSelectedInventoryId] = useState("");
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
   const [accepting, setAccepting] = useState(false);
@@ -66,6 +76,27 @@ export function OasisDashboard() {
     finally { if (!controller.signal.aborted) setLoading(false); }
   }, [demoUserId]);
   useEffect(() => { void loadDashboardData(); return () => request.current?.abort(); }, [loadDashboardData]);
+
+  const refreshSocialData = useCallback(async () => {
+    try {
+      const [nextShop, nextFriends, nextInbox] = await Promise.all([
+        getShop(demoUserId),
+        getFriends(demoUserId),
+        getInbox(demoUserId),
+      ]);
+      setShopItems(nextShop);
+      setFriends(nextFriends);
+      setInbox(nextInbox);
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "Nu am putut actualiza datele sociale.");
+    }
+  }, [demoUserId]);
+
+  useEffect(() => {
+    void refreshSocialData();
+    const timer = window.setInterval(() => void getInbox(demoUserId).then(setInbox).catch(() => undefined), 10000);
+    return () => window.clearInterval(timer);
+  }, [demoUserId, refreshSocialData]);
 
   const loadDemoStatement = async () => {
     setImporting(true);
@@ -117,6 +148,36 @@ export function OasisDashboard() {
       setAccepting(false);
     }
   };
+
+  const refreshWallet = async () => {
+    const nextWallet = await getWallet(demoUserId);
+    setWallet(nextWallet);
+    dispatch({
+      type: "syncWallet",
+      simulatedBalance: nextWallet.balances.RON_SIM,
+      investedRon: nextWallet.investedRon,
+      inventory: nextWallet.inventory,
+    });
+  };
+
+  const runSocialAction = async (action: () => Promise<unknown>, syncWalletAfter = false) => {
+    setSocialBusy(true);
+    setApiError("");
+    try {
+      await action();
+      if (syncWalletAfter) await refreshWallet();
+      await refreshSocialData();
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "Acțiunea nu a putut fi finalizată.");
+    } finally {
+      setSocialBusy(false);
+    }
+  };
+
+  const availablePlots = ISLAND_PLOTS.filter((plot) =>
+    !wallet?.inventory.some((item) => item.placedPlot === plot.id) &&
+    !inbox.some((challenge) => challenge.blockedPlot === plot.id),
+  );
   const latestReward = city.rewards.at(-1);
   const cityName = city.isRuined ? "Oraș Abandonat" : city.cityLevel === 1 ? "Cort pe plajă" : latestReward || "Oaza ta";
   const insufficient = questData ? questData.amountToSave > city.simulatedBalance : false;
@@ -140,6 +201,9 @@ export function OasisDashboard() {
                     setInsights(null);
                     setWallet(null);
                     setProjections([]);
+                    setShopItems([]);
+                    setFriends([]);
+                    setInbox([]);
                     setApiError("");
                     setDemoUserId(event.target.value);
                   }}
@@ -175,14 +239,24 @@ export function OasisDashboard() {
             <div className="island-scene relative overflow-hidden rounded-lg border border-border">
               <div className={`relative transition-all duration-700 ${city.isRuined ? "grayscale opacity-40" : ""}`}>
                 <img src={island} width={1536} height={1024} alt="Insulă tropicală cu un cort pe plajă și spațiu pentru un oraș" className="block aspect-[3/2] w-full object-cover" />
-                <div aria-hidden className="city-buildings absolute inset-0">
-                  {city.rewards.slice(-3).map((reward, i) => <span key={`${reward}-${i}`} className={`city-building city-building-${i} animate-pop`}>{rewardSymbol(reward, questData?.rewardType)}{reward.toLocaleLowerCase("ro").includes("pisic") && <span className="city-pet">🐈</span>}</span>)}
+                <div className="absolute inset-0">
+                  {ISLAND_PLOTS.map((plot) => {
+                    const item = wallet?.inventory.find((entry) => entry.placedPlot === plot.id);
+                    const banana = inbox.find((challenge) => challenge.blockedPlot === plot.id);
+                    const blocked = Boolean(item || banana);
+                    return <button key={plot.id} type="button" aria-label={banana ? `Plot blocat de banana, ${plot.id}` : item ? `${item.name}, ${plot.id}` : `Plot liber ${plot.id}`} disabled={blocked} onClick={() => setSelectedPlotId(plot.id)} className={`absolute grid size-12 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border border-white/30 bg-black/25 text-3xl shadow-lg backdrop-blur-sm transition hover:scale-110 ${selectedPlotId === plot.id && !blocked ? "ring-2 ring-neon" : ""}`} style={{ left: `${plot.x}%`, top: `${plot.y}%`, zIndex: plot.zIndex, transform: `translate(-50%, -50%) scale(${plot.scale})` }}>{banana ? "🍌" : item ? rewardSymbol(item.name, item.type) : "＋"}</button>;
+                  })}
                 </div>
               </div>
               <div className="absolute left-4 top-4 rounded-md border border-glass-border bg-background/80 px-3 py-2 text-xs font-semibold backdrop-blur-md">Nivel {city.cityLevel} <span className="mx-2 text-muted-foreground">/</span> {city.isRuined ? "Poveste întreruptă" : "Oaza ta"}</div>
               <div className="absolute inset-x-0 bottom-0 bg-background/90 px-5 py-4 backdrop-blur-md"><p className={`text-lg font-bold ${city.isRuined ? "text-destructive" : "text-foreground"}`}>{cityName}</p><p className="mt-1 text-xs text-muted-foreground">{city.isRuined ? "Economiile au fost retrase. O nouă provocare poate reconstrui insula." : city.cityLevel === 1 ? "Fiecare alegere bună pune o cărămidă în plus." : `${city.rewards.length} recompense adăugate pe insulă`}</p></div>
             </div>
             <div className="mt-5 flex items-center gap-3 border-b border-border pb-5"><span className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary"><Leaf className="size-4" /></span><p className="text-sm text-muted-foreground">{city.isRuined ? "Un nou început e încă posibil." : <>Nu renunți la ce îți place. <span className="text-foreground">Doar alegi un pic mai puțin.</span></>}</p></div>
+            <div className="mt-4 flex flex-wrap items-end gap-2">
+              <label className="text-xs text-muted-foreground">Plot liber<select aria-label="Plot liber" value={selectedPlotId} onChange={(event) => setSelectedPlotId(event.target.value)} className="mt-1 block h-9 rounded-md border border-border bg-background px-2 text-sm text-foreground" disabled={!availablePlots.length}>{availablePlots.map((plot) => <option key={plot.id} value={plot.id}>{plot.id}</option>)}</select></label>
+              <label className="text-xs text-muted-foreground">Item de plasat<select aria-label="Item din inventar" value={selectedInventoryId} onChange={(event) => setSelectedInventoryId(event.target.value)} className="mt-1 block h-9 min-w-40 rounded-md border border-border bg-background px-2 text-sm text-foreground"><option value="">Alege item</option>{wallet?.inventory.filter((item) => !item.placedPlot && item.type !== "action").map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+              <Button variant="outline" disabled={socialBusy || !selectedInventoryId || !availablePlots.some((plot) => plot.id === selectedPlotId)} onClick={() => void runSocialAction(() => placeInventoryItem(selectedInventoryId, selectedPlotId, demoUserId), true)}>Plasează</Button>
+            </div>
             <div className="mt-5 flex flex-wrap items-center justify-between gap-3"><p className="text-xs text-muted-foreground">{city.saved > 0 ? `${ron(city.saved)} susțin orașul tău.` : "Orașul tău începe cu prima provocare."}</p><Button variant="outline" onClick={() => setWithdrawOpen(true)} disabled={city.isRuined} className="border-destructive/30 bg-transparent text-destructive hover:bg-destructive/10 hover:text-destructive"><ArrowDownLeft />Sparge Economiile (Retrage)</Button></div>
           </section>
           <section aria-label="Misiunea AI" className="min-w-0">
@@ -208,6 +282,11 @@ export function OasisDashboard() {
               </div>}
             </div>
           </section>
+        </div>
+        <div className="mt-8 space-y-7">
+          <Shop items={shopItems} credits={wallet?.balances.CREDITS ?? 0} loading={socialBusy} onBuy={(itemId) => void runSocialAction(() => buyShopItem(itemId, crypto.randomUUID(), demoUserId), true)} />
+          <FriendsPanel friends={friends} credits={wallet?.balances.CREDITS ?? 0} busy={socialBusy} onAdd={(lookup) => void runSocialAction(() => addFriend(lookup, demoUserId))} onSendBanana={(friendId) => void runSocialAction(() => sendBanana(friendId, demoUserId), true)} />
+          <BananaInbox challenges={inbox} busy={socialBusy} onClean={(challengeId, amountRon, selectedDestination) => void runSocialAction(() => cleanBanana(challengeId, amountRon, selectedDestination, demoUserId), true)} onMute={(senderId) => void runSocialAction(() => muteFriend(senderId, true, demoUserId))} />
         </div>
         <footer className="mt-9 flex items-center justify-between border-t border-border pt-5 text-xs text-muted-foreground"><span>Oasis — construiește-ți viitorul.</span><span>Prototip demonstrativ</span></footer>
       </main>

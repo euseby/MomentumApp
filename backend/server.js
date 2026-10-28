@@ -8,6 +8,7 @@ const { createQuestsRouter } = require("./src/routes/quests");
 const { createStatementsRouter } = require("./src/routes/statements");
 const { createQuestActionsRouter } = require("./src/routes/quest-actions");
 const { createProjectionRouter } = require("./src/routes/projection");
+const { createSocialRouter } = require("./src/routes/social");
 const llm = require("./src/services/llm");
 const { getCurrentUser } = require("./src/services/current-user");
 const { addLedgerEntry, getWalletBalances } = require("./src/services/ledger");
@@ -43,6 +44,7 @@ function createApp(llmClient = openai, activeRepository = repository) {
   app.use(createQuestsRouter(llmClient, activeRepository));
   app.use(createQuestActionsRouter(activeRepository));
   app.use(createProjectionRouter(activeRepository));
+  app.use(createSocialRouter(activeRepository));
   return app;
 }
 
