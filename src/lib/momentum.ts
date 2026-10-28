@@ -48,3 +48,10 @@ export async function fetchMomentum(payload: MomentumRequest): Promise<{ data: M
     return { data: MOCK_RESPONSE, mock: true };
   }
 }
+
+/** Valoarea viitoare a unei contribuții lunare, cu dobândă compusă lunar (Tezaur ~6%/an). */
+export function projectValue(monthly: number, years: number, annualRate = 0.06): number {
+  if (monthly <= 0 || years <= 0) return 0;
+  const r = annualRate / 12, n = Math.round(years * 12);
+  return Math.round(monthly * ((Math.pow(1 + r, n) - 1) / r));
+}
