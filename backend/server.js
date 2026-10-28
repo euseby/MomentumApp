@@ -16,16 +16,13 @@ const BASE_URL = process.env.BASE_URL || "https://api.featherless.ai/v1";
 const MODEL_NAME =
   process.env.MODEL_NAME || "meta-llama/Meta-Llama-3.1-8B-Instruct";
 
-if (!API_KEY) {
-  console.error("❌  Lipsește API_KEY în .env — nu pot porni serverul.");
-  process.exit(1);
-}
-
 // ─── OpenAI client pointed at Featherless ────────────────────
-const openai = new OpenAI({
-  apiKey: API_KEY,
-  baseURL: BASE_URL,
-});
+const openai = API_KEY
+  ? new OpenAI({
+      apiKey: API_KEY,
+      baseURL: BASE_URL,
+    })
+  : null;
 
 // ─── Express App ─────────────────────────────────────────────
 const app = express();
@@ -33,32 +30,146 @@ const app = express();
 app.use(cors()); // permite cereri din orice origine (frontend pe alt port)
 app.use(express.json());
 
-// ─── System Prompt (conform implementationplan.md) ───────────
-const SYSTEM_PROMPT = `Ești un expert financiar comportamental din România. Primești vârsta, venitul și o cheltuială recurentă a unui tânăr. Găsește o modalitate de a reduce acea cheltuială (nu de a o elimina) și calculează empiric câți bani ar strânge până la 65 de ani dacă ar investi economiile în Titluri de Stat Tezaur (aprox 6% dobândă anuală). Nu ține prelegeri. Trebuie să returnezi răspunsul OBLIGATORIU în format JSON pur, fără markdown, fără backticks, cu următoarele chei exacte:
-habitToChange (string), monthlySavings (number), futureValueAt65 (number), investmentVehicle (string), actionMessage (string, mesaj motivațional scurt și prietenos), confidenceScore (number 0-100).
-Răspunde DOAR cu obiectul JSON, nimic altceva.
+// ─── System Prompt ───────────────────────────────────────────
+const SYSTEM_PROMPT = `Ești Oasis, un Game Master pentru un joc de simulare financiară în care utilizatorul construiește o insulă virtuală. Folosește datele utilizatorului pentru a crea o Misiune Zilnică prietenoasă, legată de un obicei și de o mică economie posibilă azi. Oferă o recompensă virtuală tangibilă pentru insulă și estimează valoarea nominală a economiilor investite până la vârsta de 65 de ani, folosind orientativ un randament anual de 6% pentru Titluri de stat. Proiecția este o estimare, nu o garanție. Nu oferi prelegeri și nu inventa date despre utilizator.
+
+Returnează OBLIGATORIU un singur obiect JSON valid, fără markdown, fără backticks și fără text suplimentar, cu exact aceste chei și tipuri:
+questTitle (string), questStory (string), amountToSave (number, sumă propusă spre economisire azi în RON), virtualReward (string), futureRealValue (number, estimare în RON la 65 de ani), streakBonus (boolean, întotdeauna true).
+Răspunde DOAR cu obiectul JSON.
 /no_think`;
+
+function extractJsonObject(text) {
+  for (let start = 0; start < text.length; start += 1) {
+    if (text[start] !== "{") continue;
+
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+
+    for (let index = start; index < text.length; index += 1) {
+      const character = text[index];
+
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (character === "\\") {
+          escaped = true;
+        } else if (character === '"') {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (character === '"') {
+        inString = true;
+      } else if (character === "{") {
+        depth += 1;
+      } else if (character === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          try {
+            const parsed = JSON.parse(text.slice(start, index + 1));
+            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+              return parsed;
+            }
+          } catch {
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  throw new Error("Nu am putut extrage un obiect JSON valid din răspunsul LLM.");
+}
+
+function normalizeQuestResponse(parsed) {
+  const requiredStrings = ["questTitle", "questStory", "virtualReward"];
+  for (const key of requiredStrings) {
+    if (typeof parsed[key] !== "string" || !parsed[key].trim()) {
+      throw new Error(`Răspunsul LLM nu conține un câmp valid: ${key}.`);
+    }
+  }
+
+  const amountToSave = Number(parsed.amountToSave);
+  const futureRealValue = Number(parsed.futureRealValue);
+  if (
+    !Number.isFinite(amountToSave) ||
+    amountToSave < 0 ||
+    !Number.isFinite(futureRealValue) ||
+    futureRealValue < 0
+  ) {
+    throw new Error("Răspunsul LLM conține valori numerice invalide.");
+  }
+
+  return {
+    questTitle: parsed.questTitle.trim(),
+    questStory: parsed.questStory.trim(),
+    amountToSave,
+    virtualReward: parsed.virtualReward.trim(),
+    futureRealValue,
+    streakBonus: true,
+  };
+}
+
+function buildFallbackResponse({ age, guiltyPleasure, monthlyGuiltyPleasureSpend }) {
+  const amountToSave = Math.round((monthlyGuiltyPleasureSpend / 60) * 100) / 100;
+  const monthsToInvest = Math.max(0, Math.floor((65 - age) * 12));
+  const monthlyRate = Math.pow(1.06, 1 / 12) - 1;
+  const monthlyContribution = amountToSave * 30;
+  const futureRealValue =
+    monthlyRate === 0
+      ? monthlyContribution * monthsToInvest
+      : monthlyContribution *
+        ((Math.pow(1 + monthlyRate, monthsToInvest) - 1) / monthlyRate);
+
+  return {
+    questTitle: "Misiunea de azi: O alegere pentru insula ta",
+    questStory: `Pune deoparte ${amountToSave} RON azi, reducând puțin cheltuielile pentru ${guiltyPleasure}. Economiile regulate pot crește în timp, dar rezultatul nu este garantat.`,
+    amountToSave,
+    virtualReward: "Oază cu palmieri",
+    futureRealValue: Math.round(futureRealValue),
+    streakBonus: true,
+  };
+}
 
 // ─── POST /api/momentum ─────────────────────────────────────
 app.post("/api/momentum", async (req, res) => {
-  try {
-    // 1. Validare minimală
-    const { age, monthlyIncome, guiltyPleasure, monthlyGuiltyPleasureSpend } =
-      req.body;
+  const body = req.body || {};
+  const age = Number(body.age);
+  const monthlyIncome = Number(body.monthlyIncome);
+  const monthlyGuiltyPleasureSpend = Number(body.monthlyGuiltyPleasureSpend);
+  const guiltyPleasure =
+    typeof body.guiltyPleasure === "string" ? body.guiltyPleasure.trim() : "";
 
-    if (
-      age == null ||
-      monthlyIncome == null ||
-      !guiltyPleasure ||
-      monthlyGuiltyPleasureSpend == null
-    ) {
-      return res.status(400).json({
-        error:
-          "Toate câmpurile sunt obligatorii: age, monthlyIncome, guiltyPleasure, monthlyGuiltyPleasureSpend",
-      });
+  if (
+    !Number.isInteger(age) ||
+    age < 1 ||
+    age > 120 ||
+    !Number.isFinite(monthlyIncome) ||
+    monthlyIncome < 0 ||
+    !guiltyPleasure ||
+    !Number.isFinite(monthlyGuiltyPleasureSpend) ||
+    monthlyGuiltyPleasureSpend < 0
+  ) {
+    return res.status(400).json({
+      error:
+        "Trimite age (1-120), monthlyIncome, guiltyPleasure și monthlyGuiltyPleasureSpend cu valori valide.",
+    });
+  }
+
+  const input = {
+    age,
+    monthlyIncome,
+    guiltyPleasure,
+    monthlyGuiltyPleasureSpend,
+  };
+
+  try {
+    if (!openai) {
+      throw new Error("API_KEY nu este configurată; se folosește fallback-ul local.");
     }
 
-    // 2. Construim mesajul utilizatorului pentru LLM
     const userMessage = `
 Datele utilizatorului:
 - Vârstă: ${age} ani
@@ -68,9 +179,8 @@ Datele utilizatorului:
 
 Generează recomandarea financiară în format JSON.`.trim();
 
-    console.log(`\n📥  Cerere primită:`, { age, monthlyIncome, guiltyPleasure, monthlyGuiltyPleasureSpend });
+  console.log("\n📥  Cerere de misiune primită.");
 
-    // 3. Apel către Featherless AI (OpenAI-compatible)
     const completion = await openai.chat.completions.create({
       model: MODEL_NAME,
       messages: [
@@ -85,107 +195,20 @@ Generează recomandarea financiară în format JSON.`.trim();
     });
 
     const rawResponse = completion.choices[0]?.message?.content;
-    console.log(`🤖  Răspuns brut LLM:\n`, rawResponse);
-
-    if (!rawResponse) {
+    if (typeof rawResponse !== "string" || !rawResponse.trim()) {
       throw new Error("LLM-ul a returnat un răspuns gol.");
     }
 
-    // 4. Parsăm JSON-ul din răspunsul LLM-ului
-    //    Curățăm thinking tags (Qwen3+) și backticks
-    let cleanedResponse = rawResponse.trim();
-
-    // Eliminăm Qwen3 thinking tags dacă apar
-    cleanedResponse = cleanedResponse
-      .replace(/<think>[\s\S]*?<\/think>/g, "")
-      .trim();
-
-    // Eliminăm eventualele blocuri markdown ```json ... ```
-    cleanedResponse = cleanedResponse
-      .replace(/^```json\s*/i, "")
-      .replace(/^```\s*/i, "")
-      .replace(/\s*```$/i, "")
-      .trim();
-
-    let parsed;
-    try {
-      parsed = JSON.parse(cleanedResponse);
-    } catch (parseErr) {
-      // Încercăm să extragem JSON-ul cu regex dacă parsarea directă eșuează
-      const jsonMatch = cleanedResponse.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        parsed = JSON.parse(jsonMatch[0]);
-      } else {
-        throw new Error(
-          `Nu am putut parsa răspunsul LLM ca JSON: ${cleanedResponse}`
-        );
-      }
-    }
-
-    // 5. Validăm cheile obligatorii conform contractului
-    const requiredKeys = [
-      "habitToChange",
-      "monthlySavings",
-      "futureValueAt65",
-      "investmentVehicle",
-      "actionMessage",
-      "confidenceScore",
-    ];
-
-    for (const key of requiredKeys) {
-      if (!(key in parsed)) {
-        console.warn(`⚠️  Cheia "${key}" lipsește din răspunsul LLM, se adaugă valoare default.`);
-      }
-    }
-
-    // Asigurăm structura contractului cu valori fallback
-    const response = {
-      habitToChange: parsed.habitToChange || guiltyPleasure,
-      monthlySavings: Number(parsed.monthlySavings) || 0,
-      futureValueAt65: Number(parsed.futureValueAt65) || 0,
-      investmentVehicle:
-        parsed.investmentVehicle || "Titluri de stat Tezaur (fără taxe)",
-      actionMessage:
-        parsed.actionMessage || "Încearcă să reduci cheltuielile pe " + guiltyPleasure + " și investește diferența!",
-      confidenceScore: Number(parsed.confidenceScore) || 75,
-    };
+    const response = normalizeQuestResponse(extractJsonObject(rawResponse));
 
     console.log(`✅  Răspuns trimis către frontend:`, response);
     return res.json(response);
   } catch (err) {
     console.error(`\n❌  Eroare:`, err.message || err);
 
-    // Fallback: dacă LLM-ul pică, returnăm un răspuns calculat simplu
-    const { age, monthlyIncome, guiltyPleasure, monthlyGuiltyPleasureSpend } =
-      req.body;
-
-    if (age && monthlyGuiltyPleasureSpend) {
-      const monthlySavings = Math.round(monthlyGuiltyPleasureSpend * 0.5);
-      const yearsToInvest = 65 - age;
-      const annualRate = 0.06;
-      // Future Value of Annuity formula
-      const futureValue = Math.round(
-        monthlySavings *
-          12 *
-          ((Math.pow(1 + annualRate, yearsToInvest) - 1) / annualRate)
-      );
-
-      const fallbackResponse = {
-        habitToChange: guiltyPleasure || "Cheltuieli recurente",
-        monthlySavings,
-        futureValueAt65: futureValue,
-        investmentVehicle: "Titluri de stat Tezaur (fără taxe)",
-        actionMessage: `Dacă reduci cheltuielile pe ${guiltyPleasure || "plăcerea ta vinovată"} cu 50%, ai putea economisi ${monthlySavings} RON/lună. Investiți în Tezaur, la 65 de ani ai avea ~${futureValue.toLocaleString("ro-RO")} RON.`,
-        confidenceScore: 60,
-      };
-
-      console.log(`🔄  Fallback matematic trimis:`, fallbackResponse);
-      return res.json(fallbackResponse);
-    }
-
-    return res.status(500).json({
-      error: "Eroare internă la procesarea cererii. Încearcă din nou.",
-    });
+    const fallbackResponse = buildFallbackResponse(input);
+    console.log("🔄  Misiune calculată local:", fallbackResponse);
+    return res.json(fallbackResponse);
   }
 });
 
@@ -204,10 +227,21 @@ app.get("/api/health", (req, res) => {
 });
 
 // ─── Start Server ────────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`\n🚀  Momentum API rulează pe http://localhost:${PORT}`);
-  console.log(`📡  Model: ${MODEL_NAME}`);
-  console.log(`🔗  Base URL: ${BASE_URL}`);
-  console.log(`\n📌  Endpoint: POST http://localhost:${PORT}/api/momentum`);
-  console.log(`📌  Health:   GET  http://localhost:${PORT}/api/health\n`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`\n🚀  Momentum API rulează pe http://localhost:${PORT}`);
+    console.log(`📡  Model: ${MODEL_NAME}`);
+    console.log(`🔗  Base URL: ${BASE_URL}`);
+    if (!API_KEY) console.warn("⚠️  API_KEY lipsește; endpointul va folosi fallback-ul local.");
+    console.log(`\n📌  Endpoint: POST http://localhost:${PORT}/api/momentum`);
+    console.log(`📌  Health:   GET  http://localhost:${PORT}/api/health\n`);
+  });
+}
+
+module.exports = {
+  app,
+  SYSTEM_PROMPT,
+  extractJsonObject,
+  normalizeQuestResponse,
+  buildFallbackResponse,
+};
