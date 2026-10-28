@@ -6,65 +6,98 @@ const {
   MOMENTUM_SYSTEM_PROMPT,
   requestQuestCopy,
 } = require("../services/llm");
+const { getCurrentUser } = require("../services/current-user");
+const { buildInsights } = require("../services/insights");
 
-const OASIS_BANK_TRANSACTIONS = [
-  { date: "2026-10-19", merchant: "5 to go", amount: 20, category: "coffee" },
-  { date: "2026-10-20", merchant: "Starbucks", amount: 20, category: "coffee" },
-  { date: "2026-10-21", merchant: "5 to go", amount: 20, category: "coffee" },
-  { date: "2026-10-22", merchant: "Starbucks", amount: 20, category: "coffee" },
-  { date: "2026-10-23", merchant: "5 to go", amount: 20, category: "coffee" },
-  { date: "2026-10-24", merchant: "Starbucks", amount: 20, category: "coffee" },
-  { date: "2026-10-25", merchant: "Uber", amount: 38, category: "ride_hailing" },
-  { date: "2026-10-26", merchant: "Uber", amount: 32, category: "ride_hailing" },
-  { date: "2026-10-27", merchant: "Salariu", amount: 4000, category: "income" },
-  { date: "2026-10-27", merchant: "Kaufland", amount: 185, category: "groceries" },
-];
-
-function analyzeDemoHabit(transactions = OASIS_BANK_TRANSACTIONS) {
-  const coffee = transactions.filter((entry) => entry.category === "coffee" && entry.amount > 0);
-  const count = coffee.length;
-  const total = coffee.reduce((sum, entry) => sum + entry.amount, 0);
-  const suggestedCount = Math.max(1, Math.round(count * (1 - assumptions.suggestedReductionPct)));
-  const averagePrice = count ? total / count : 0;
-  return {
-    category: "cafea",
-    count,
-    total,
-    avgPrice: averagePrice,
-    periodDays: 7,
-    suggestedReductionPct: assumptions.suggestedReductionPct,
-    suggestedCount,
-    weeklySaving: Math.round((total - suggestedCount * averagePrice) * 100) / 100,
-  };
-}
-
-function createQuestsRouter(llmClient) {
+function createQuestsRouter(llmClient, repository) {
   const router = express.Router();
 
   router.post("/api/oasis", async (req, res) => {
-    if (!llmClient) {
-      return res.status(503).json({ error: "LLM-ul nu este configurat. Verifică API_KEY în backend/.env." });
-    }
-    const habit = analyzeDemoHabit();
-    const allowedRewards = shop.filter((item) => item.type !== "action").map(({ id, name, type }) => ({ id, name, type }));
     try {
+      const user = await getCurrentUser(req, repository);
+      if (!llmClient) {
+        return res.status(503).json({ error: "LLM-ul nu este configurat. Verifică API_KEY în backend/.env." });
+      }
+      const since = new Date(Date.now() - 28 * 86400000).toISOString().slice(0, 10);
+      const transactions = await repository.listTransactions(user.id, { since });
+      const habit = buildInsights(transactions).habit;
+      if (!habit) return res.status(422).json({ error: "Importă tranzacții și detectează un obicei înainte de a cere un quest." });
+      const allowedRewards = shop.filter((item) => item.type !== "action").map(({ id, name, type }) => ({ id, name, type }));
       const copy = await requestQuestCopy(llmClient, {
         messages: [
           { role: "system", content: OASIS_SYSTEM_PROMPT },
           { role: "user", content: JSON.stringify({ habit, rewards: allowedRewards }) },
         ],
       });
+      await repository.createQuest(user.id, {
+        habit_json: habit,
+        llm_json: { questTitle: copy.questTitle, rewardId: copy.reward.id },
+        weeklySavingRon: habit.weeklySaving,
+        rewardId: copy.reward.id,
+      });
       return res.json({
         questTitle: copy.questTitle,
-        analysisMessage: `Am observat ${habit.count} cafele săptămâna trecută (${habit.total} RON).`,
-        proposalMessage: `Ce-ar fi să cumperi doar ${habit.suggestedCount} săptămâna asta? Cei ${habit.weeklySaving} RON economisiți se transformă într-un ${copy.reward.name} pentru insula ta.`,
+        analysisMessage: `Am observat ${habit.count} ${habit.category} în ${habit.periodDays} zile (${habit.total} RON).`,
+        proposalMessage: `Ce-ar fi să reduci la ${habit.suggestedCount} apariții? Ai economisi ${habit.weeklySaving} RON pe săptămână și ai debloca ${copy.reward.name}.`,
         amountToSave: habit.weeklySaving,
         virtualReward: copy.reward.name,
         rewardType: copy.reward.type,
       });
     } catch (error) {
+      if (error.status) return res.status(error.status).json({ error: "Utilizator demo necunoscut." });
       console.error("Eroare la generarea questului Oasis:", error.message || error);
       return res.status(502).json({ error: "Nu am putut genera misiunea Oasis cu modelul AI. Încearcă din nou." });
+    }
+  });
+
+  router.post("/api/quests/generate", async (req, res) => {
+    let user;
+    try {
+      user = await getCurrentUser(req, repository);
+      if (!llmClient) {
+        return res.status(503).json({ error: "LLM-ul nu este configurat. Verifică API_KEY în backend/.env." });
+      }
+      const since = new Date(Date.now() - 28 * 86400000).toISOString().slice(0, 10);
+      const transactions = await repository.listTransactions(user.id, { since });
+      const habit = buildInsights(transactions).habit;
+      if (!habit) {
+        return res.status(422).json({ error: "Nu am găsit încă un obicei repetitiv. Importă mai multe tranzacții și încearcă din nou." });
+      }
+
+      const allowedRewards = shop
+        .filter((item) => item.type !== "action")
+        .map(({ id, name, type }) => ({ id, name, type }));
+      const copy = await requestQuestCopy(llmClient, {
+        requireStory: true,
+        messages: [
+          { role: "system", content: MOMENTUM_SYSTEM_PROMPT },
+          { role: "user", content: JSON.stringify({ habit, rewards: allowedRewards }) },
+        ],
+      });
+      const analysisMessage = `Am observat ${habit.count} ${habit.category} în ${habit.periodDays} zile (${habit.total} RON).`;
+      const proposalMessage = `Ce-ar fi să reduci la ${habit.suggestedCount} apariții? Ai economisi aproximativ ${habit.weeklySaving} RON pe săptămână și ai debloca ${copy.reward.name}.`;
+      const stored = await repository.createQuest(user.id, {
+        habit_json: habit,
+        llm_json: { questTitle: copy.questTitle, questStory: copy.questStory, rewardId: copy.reward.id },
+        weeklySavingRon: habit.weeklySaving,
+        rewardId: copy.reward.id,
+      });
+
+      return res.status(201).json({
+        id: stored.id,
+        questTitle: copy.questTitle,
+        questStory: copy.questStory,
+        analysisMessage,
+        proposalMessage,
+        amountToSave: habit.weeklySaving,
+        virtualReward: copy.reward.name,
+        rewardType: copy.reward.type,
+        habit,
+      });
+    } catch (error) {
+      if (error.status) return res.status(error.status).json({ error: "Utilizator demo necunoscut." });
+      console.error("Eroare la generarea questului din insight:", error.message || error);
+      return res.status(502).json({ error: "Nu am putut genera questul. Încearcă din nou." });
     }
   });
 
@@ -81,13 +114,24 @@ function createQuestsRouter(llmClient) {
     const months = Math.max(0, (assumptions.retirementAge - age) * 12);
     const monthlyRate = Math.pow(1.06, 1 / 12) - 1;
     const futureRealValue = Math.round(monthlySaving * (monthlyRate ? (Math.pow(1 + monthlyRate, months) - 1) / monthlyRate : months));
+    const suggestedCount = Math.max(0, Math.round(30 * (1 - assumptions.suggestedReductionPct)));
+    const habit = {
+      category: "obicei recurent",
+      count: 30,
+      total: monthlyGuiltyPleasureSpend,
+      avgPrice: Math.round((monthlyGuiltyPleasureSpend / 30) * 100) / 100,
+      periodDays: 30,
+      suggestedReductionPct: assumptions.suggestedReductionPct,
+      suggestedCount,
+      weeklySaving: Math.round((monthlySaving * 7 / 30) * 100) / 100,
+    };
     const allowedRewards = shop.filter((item) => item.type !== "action").map(({ id, name, type }) => ({ id, name, type }));
     try {
       const copy = await requestQuestCopy(llmClient, {
         requireStory: true,
         messages: [
           { role: "system", content: MOMENTUM_SYSTEM_PROMPT },
-          { role: "user", content: JSON.stringify({ age, monthlyIncome, guiltyPleasure, rewards: allowedRewards }) },
+          { role: "user", content: JSON.stringify({ habit, rewards: allowedRewards }) },
         ],
       });
       return res.json({
@@ -107,4 +151,4 @@ function createQuestsRouter(llmClient) {
   return router;
 }
 
-module.exports = { createQuestsRouter, analyzeDemoHabit, OASIS_BANK_TRANSACTIONS };
+module.exports = { createQuestsRouter };

@@ -6,11 +6,11 @@ const {
   normalizeOasisAnalysis,
   normalizeQuestCopy,
   normalizeQuestResponse,
-  OASIS_BANK_TRANSACTIONS,
   addLedgerEntry,
   getWalletBalances,
 } = require("./server");
 const { createMemoryRepository } = require("./src/repo");
+const { parseStatementCsv, parseStatementText, normalizeMerchant, categorize } = require("./src/services/statements");
 
 const requestBody = {
   age: 24,
@@ -70,8 +70,10 @@ test("POST /api/momentum computes money values in code and forwards user data", 
   assert.equal(result.virtualReward, "Cafenea");
   assert.equal(typeof result.futureRealValue, "number");
   assert.equal(result.streakBonus, true);
-    assert.match(completionRequest.messages[1].content, /Comenzi Tazz/);
-  assert.doesNotMatch(completionRequest.messages[1].content, /400 RON/);
+    const llmInput = JSON.parse(completionRequest.messages[1].content);
+    assert.deepEqual(Object.keys(llmInput), ["habit", "rewards"]);
+    assert.equal(llmInput.habit.total, 400);
+    assert.equal(JSON.stringify(llmInput).includes("Comenzi Tazz"), false);
   });
 });
 
@@ -131,7 +133,7 @@ test("normalizes the Oasis response and rejects missing fields", () => {
   );
 });
 
-test("POST /api/oasis sends ten transactions and returns the shared contract", async () => {
+test("POST /api/oasis uses imported aggregates and returns the shared contract", async () => {
   const analysis = { questTitle: "Operațiunea: Salvatorul de Cafea", rewardId: "cafenea" };
   let completionRequest;
   const app = createApp({
@@ -146,41 +148,26 @@ test("POST /api/oasis sends ten transactions and returns the shared contract", a
   });
 
   await withServer(app, async (baseUrl) => {
+    await fetch(`${baseUrl}/api/statements/demo`, {
+      method: "POST",
+      headers: { "x-demo-user": "demo-ioana" },
+    });
     const response = await fetch(`${baseUrl}/api/oasis`, { method: "POST" });
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), {
       questTitle: analysis.questTitle,
-      analysisMessage: "Am observat 6 cafele săptămâna trecută (120 RON).",
-      proposalMessage: "Ce-ar fi să cumperi doar 4 săptămâna asta? Cei 40 RON economisiți se transformă într-un Cafenea pentru insula ta.",
+      analysisMessage: "Am observat 6 cafea în 7 zile (120 RON).",
+      proposalMessage: "Ce-ar fi să reduci la 4 apariții? Ai economisi 40 RON pe săptămână și ai debloca Cafenea.",
       amountToSave: 40,
       virtualReward: "Cafenea",
       rewardType: "building",
     });
-    assert.equal(OASIS_BANK_TRANSACTIONS.length, 10);
-    assert.equal(
-      OASIS_BANK_TRANSACTIONS.filter((transaction) =>
-        ["Starbucks", "5 to go"].includes(transaction.merchant),
-      ).length,
-      6,
-    );
-    assert.equal(
-      OASIS_BANK_TRANSACTIONS
-        .filter((transaction) => ["Starbucks", "5 to go"].includes(transaction.merchant))
-        .reduce((sum, transaction) => sum + transaction.amount, 0),
-      120,
-    );
     const llmInput = JSON.parse(completionRequest.messages[1].content);
-    assert.deepEqual(llmInput.habit, {
-      category: "cafea",
-      count: 6,
-      total: 120,
-      avgPrice: 20,
-      periodDays: 7,
-      suggestedReductionPct: 0.33,
-      suggestedCount: 4,
-      weeklySaving: 40,
-    });
+    assert.equal(llmInput.habit.count, 6);
+    assert.equal(llmInput.habit.total, 120);
+    assert.equal(llmInput.habit.weeklySaving, 40);
     assert.equal("transactions" in llmInput, false);
+    assert.equal(JSON.stringify(llmInput).includes("Starbucks"), false);
   });
 });
 
@@ -202,6 +189,125 @@ test("LLM quest copy cannot inject numeric claims", () => {
     () => normalizeQuestCopy({ questTitle: "Economisește 40 RON", rewardId: "cafenea" }),
     /nu poate conține numere/,
   );
+});
+
+test("CSV parser handles comma delimiter, signed amounts, and skips bad rows", () => {
+  const csv = Buffer.from([
+    "Date,Description,Amount",
+    "2026-10-19,PLATA POS 5 to go Bucuresti,-20.00",
+    "bad-date,Starbucks,-20.00",
+    "2026-10-20,Salariu,4000.00",
+  ].join("\n"));
+  const transactions = parseStatementCsv(csv);
+
+  assert.equal(transactions.length, 2);
+  assert.deepEqual(transactions[0], {
+    date: "2026-10-19",
+    merchantNorm: "to go",
+    category: "coffee",
+    amountRon: -20,
+  });
+  assert.equal(transactions[1].amountRon, 4000);
+  assert.equal(transactions[1].category, "income");
+});
+
+test("CSV parser handles semicolon delimiter, decimal comma, and debit/credit columns", () => {
+  const csv = Buffer.from([
+    "Data;Descriere;Debit;Credit",
+    "27.10.2026;PLATA POS Starbucks Bucuresti;20,50;",
+    "27/10/2026;Salariu;;4000,00",
+  ].join("\n"));
+  const transactions = parseStatementCsv(csv);
+
+  assert.equal(transactions[0].amountRon, -20.5);
+  assert.equal(transactions[0].category, "coffee");
+  assert.equal(transactions[1].date, "2026-10-27");
+  assert.equal(transactions[1].amountRon, 4000);
+});
+
+test("CSV parser rejects empty input and anonymizes private-person transfers", () => {
+  assert.throws(() => parseStatementCsv(Buffer.from("  ")), /gol/);
+  assert.equal(normalizeMerchant("Transfer catre Ion Popescu"), "Transfer");
+  assert.equal(normalizeMerchant("Virament Maria Ionescu"), "Transfer");
+  assert.equal(categorize("Transfer"), "transfer");
+});
+
+test("demo statement produces deterministic insights and a user-scoped quest", async () => {
+  const repo = createMemoryRepository();
+  let llmRequest;
+  const llmClient = {
+    chat: {
+      completions: {
+        create: async (request) => {
+          llmRequest = request;
+          return {
+            choices: [{ message: { content: JSON.stringify({ questTitle: "Operațiunea Cafea", questStory: "Fiecare alegere mică îți crește insula.", rewardId: "cafenea" }) } }],
+          };
+        },
+      },
+    },
+  };
+  const app = createApp(llmClient, repo);
+
+  await withServer(app, async (baseUrl) => {
+    const userHeaders = { "x-demo-user": "demo-ioana" };
+    const imported = await fetch(`${baseUrl}/api/statements/demo`, { method: "POST", headers: userHeaders });
+    assert.equal(imported.status, 201);
+    const importResult = await imported.json();
+    assert.equal(typeof importResult.statementId, "string");
+    assert.equal(importResult.transactionCount, 10);
+
+    const insightsResponse = await fetch(`${baseUrl}/api/insights`, { headers: userHeaders });
+    const insights = await insightsResponse.json();
+    assert.equal(insights.incomeRon, 4000);
+    assert.equal(insights.spendRon, 375);
+    assert.deepEqual(insights.habit, {
+      category: "cafea",
+      categoryId: "coffee",
+      count: 6,
+      total: 120,
+      avgPrice: 20,
+      periodDays: 7,
+      suggestedReductionPct: 0.33,
+      suggestedCount: 4,
+      weeklySaving: 40,
+    });
+
+    const generated = await fetch(`${baseUrl}/api/quests/generate`, {
+      method: "POST",
+      headers: userHeaders,
+    });
+    const quest = await generated.json();
+    assert.equal(generated.status, 201);
+    assert.equal(quest.amountToSave, 40);
+    assert.equal(quest.analysisMessage, "Am observat 6 cafea în 7 zile (120 RON).");
+    assert.equal(quest.virtualReward, "Cafenea");
+
+    const llmInput = JSON.parse(llmRequest.messages[1].content);
+    assert.equal(llmInput.habit.weeklySaving, 40);
+    assert.equal("transactions" in llmInput, false);
+    assert.equal(JSON.stringify(llmInput).includes("Starbucks"), false);
+    const stored = await repo.getQuest("demo-ioana", quest.id);
+    assert.equal(stored.weeklySavingRon, 40);
+    assert.equal(await repo.getQuest("demo-radu", quest.id), null);
+    const normalized = await repo.listTransactions("demo-ioana");
+    assert.equal(normalized.some((transaction) => "description" in transaction), false);
+  });
+});
+
+test("statement upload accepts in-memory CSV and rejects non-CSV files", async () => {
+  const app = createApp(null, createMemoryRepository());
+  await withServer(app, async (baseUrl) => {
+    const form = new FormData();
+    form.append("file", new Blob(["Data,Descriere,Suma\n27.10.2026,Salariu,1000"]), "statement.csv");
+    const response = await fetch(`${baseUrl}/api/statements/import`, {
+      method: "POST",
+      headers: { "x-demo-user": "demo-radu" },
+      body: form,
+    });
+    assert.equal(response.status, 201);
+    assert.equal((await response.json()).transactionCount, 1);
+  });
 });
 
 test("GET /api/wallet is scoped to either seeded demo user", async () => {
@@ -281,4 +387,16 @@ test("repository records cannot be moved into another user's scope", async () =>
   assert.equal(quest.userId, "demo-ioana");
   assert.equal(await repo.getQuest("demo-radu", quest.id), null);
   assert.equal((await repo.getQuest("demo-ioana", quest.id)).questTitle, "Ioana's quest");
+});
+
+test("PDF text extraction accepts clear rows and rejects low-confidence text", () => {
+  const transactions = parseStatementText([
+    "Extras cont",
+    "19.10.2026 PLATA POS Starbucks Bucuresti -20,00",
+    "20.10.2026 PLATA POS Uber Bucuresti -35,50",
+  ].join("\n"));
+  assert.equal(transactions.length, 2);
+  assert.equal(transactions[0].amountRon, -20);
+  assert.equal(transactions[0].category, "coffee");
+  assert.throws(() => parseStatementText("Text fără tranzacții clare"), /CSV/);
 });

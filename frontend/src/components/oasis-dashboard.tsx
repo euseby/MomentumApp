@@ -2,7 +2,10 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { ArrowDownLeft, ArrowUpRight, Check, ChevronRight, Coffee, Coins, Leaf, LoaderCircle, RefreshCw, ShieldCheck, Sparkles, TriangleAlert, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/components/ui/alert-dialog";
-import { cityReducer, INITIAL_CITY, fetchOasis, rewardSymbol, type OasisQuest } from "@/lib/oasis";
+import { cityReducer, INITIAL_CITY, rewardSymbol, type OasisQuest } from "@/lib/oasis";
+import { generateQuest, getInsights, importDemoStatement, uploadStatement, type InsightsData } from "@/lib/api";
+import { StatementUpload } from "@/components/statement-upload";
+import { InsightsPanel } from "@/components/insights-panel";
 import island from "@/assets/oasis-island.jpg";
 
 const ron = (value: number) => new Intl.NumberFormat("ro-RO", { maximumFractionDigits: 2 }).format(value) + " RON";
@@ -11,21 +14,31 @@ export function OasisDashboard() {
   const [city, dispatch] = useReducer(cityReducer, INITIAL_CITY);
   const [demoUserId, setDemoUserId] = useState("demo-ioana");
   const [questData, setQuestData] = useState<OasisQuest | null>(null);
+  const [insights, setInsights] = useState<InsightsData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [importing, setImporting] = useState(false);
   const [apiError, setApiError] = useState("");
   const [withdrawOpen, setWithdrawOpen] = useState(false);
   const request = useRef<AbortController | null>(null);
-  const loadQuest = useCallback(async () => {
+  const loadDashboardData = useCallback(async () => {
     request.current?.abort();
     const controller = new AbortController();
     request.current = controller;
     setLoading(true);
     try {
-      const result = await fetchOasis(controller.signal, demoUserId);
+      const nextInsights = await getInsights(demoUserId, controller.signal);
       if (controller.signal.aborted) return;
-      setQuestData(result);
-      setApiError("");
+      setInsights(nextInsights);
       dispatch({ type: "newQuest" });
+      if (!nextInsights.habit) {
+        setQuestData(null);
+        setApiError("");
+        return;
+      }
+      const nextQuest = await generateQuest(demoUserId, controller.signal);
+      if (controller.signal.aborted) return;
+      setQuestData(nextQuest);
+      setApiError("");
     } catch (error) {
       if (controller.signal.aborted) return;
       setQuestData(null);
@@ -33,7 +46,33 @@ export function OasisDashboard() {
     }
     finally { if (!controller.signal.aborted) setLoading(false); }
   }, [demoUserId]);
-  useEffect(() => { void loadQuest(); return () => request.current?.abort(); }, [loadQuest]);
+  useEffect(() => { void loadDashboardData(); return () => request.current?.abort(); }, [loadDashboardData]);
+
+  const loadDemoStatement = async () => {
+    setImporting(true);
+    setApiError("");
+    try {
+      await importDemoStatement(demoUserId);
+      await loadDashboardData();
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "Nu am putut încărca extrasul demo.");
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const handleStatementUpload = async (file: File) => {
+    setImporting(true);
+    setApiError("");
+    try {
+      await uploadStatement(file, demoUserId);
+      await loadDashboardData();
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "Nu am putut importa extrasul.");
+    } finally {
+      setImporting(false);
+    }
+  };
   const latestReward = city.rewards.at(-1);
   const cityName = city.isRuined ? "Oraș Abandonat" : city.cityLevel === 1 ? "Cort pe plajă" : latestReward || "Oaza ta";
   const insufficient = questData ? questData.amountToSave > city.simulatedBalance : false;
@@ -53,6 +92,9 @@ export function OasisDashboard() {
                   value={demoUserId}
                   onChange={(event) => {
                     dispatch({ type: "reset" });
+                    setQuestData(null);
+                    setInsights(null);
+                    setApiError("");
                     setDemoUserId(event.target.value);
                   }}
                 >
@@ -75,6 +117,9 @@ export function OasisDashboard() {
           <div><p className="flex items-center gap-2 text-xs text-muted-foreground"><ArrowUpRight className="size-4 text-primary" />Economii simulate</p><p data-testid="saved" className="mt-2 text-xl font-extrabold tabular-nums text-primary sm:text-3xl">{ron(city.saved)}</p></div>
           <div className="col-span-2 border-t border-border pt-4 sm:col-span-1 sm:border-t-0 sm:pt-0"><p className="flex items-center gap-2 text-xs text-muted-foreground"><Sparkles className="size-4 text-neon" />Nivelul orașului</p><p data-testid="level" className="mt-2 text-xl font-extrabold sm:text-3xl">{String(city.cityLevel).padStart(2, "0")}<span className="ml-3 text-xs font-medium text-muted-foreground">{city.isRuined ? "Abandonat" : city.cityLevel === 1 ? "Început de poveste" : "În plină dezvoltare"}</span></p></div>
         </section>
+        <StatementUpload busy={loading || importing} onDemo={() => void loadDemoStatement()} onUpload={(file) => void handleStatementUpload(file)} />
+        {apiError && <p role="alert" className="mb-5 text-sm text-destructive">{apiError}</p>}
+        <InsightsPanel insights={insights} loading={loading || importing} />
         <div className="grid items-start gap-7 lg:grid-cols-[1.4fr_1fr]">
           <section aria-label="Orașul tău" className="min-w-0">
             <div className="mb-3 flex items-center justify-between"><h2 className="text-lg font-bold">Insula mea</h2><span className={`flex items-center gap-1.5 text-xs ${city.isRuined ? "text-destructive" : "text-primary"}`}><span className={`size-1.5 rounded-full ${city.isRuined ? "bg-destructive" : "bg-primary"}`} />{city.isRuined ? "Abandonată" : "Înfloritoare"}</span></div>
@@ -92,7 +137,7 @@ export function OasisDashboard() {
             <div className="mt-5 flex flex-wrap items-center justify-between gap-3"><p className="text-xs text-muted-foreground">{city.saved > 0 ? `${ron(city.saved)} susțin orașul tău.` : "Orașul tău începe cu prima provocare."}</p><Button variant="outline" onClick={() => setWithdrawOpen(true)} disabled={city.isRuined} className="border-destructive/30 bg-transparent text-destructive hover:bg-destructive/10 hover:text-destructive"><ArrowDownLeft />Sparge Economiile (Retrage)</Button></div>
           </section>
           <section aria-label="Misiunea AI" className="min-w-0">
-            <div className="mb-3 flex items-center justify-between"><h2 className="text-lg font-bold">Provocarea ta</h2><Button variant="ghost" size="icon" aria-label="Actualizează misiunea" title="Actualizează misiunea" disabled={loading} onClick={() => void loadQuest()}><RefreshCw className={loading ? "animate-spin" : ""} /></Button></div>
+            <div className="mb-3 flex items-center justify-between"><h2 className="text-lg font-bold">Provocarea ta</h2><Button variant="ghost" size="icon" aria-label="Actualizează misiunea" title="Actualizează misiunea" disabled={loading} onClick={() => void loadDashboardData()}><RefreshCw className={loading ? "animate-spin" : ""} /></Button></div>
             <div className="glass rounded-lg p-5 sm:p-6" aria-busy={loading}>
               <div className="flex items-center justify-between gap-2"><span className="flex items-center gap-2 text-xs font-bold text-neon"><Sparkles className="size-4" />OASIS GAME MASTER</span><span className="rounded-full bg-secondary px-2.5 py-1 text-xs text-muted-foreground">{loading ? "Se conectează…" : questData ? "AI conectat" : "Indisponibil"}</span></div>
               {questData ? <>
@@ -101,11 +146,11 @@ export function OasisDashboard() {
                 <p className="mt-5 text-sm leading-relaxed">{questData.proposalMessage}</p>
                 <div className="my-6 flex items-center gap-4 border-y border-border py-4"><span aria-hidden className="text-4xl">{rewardSymbol(questData.virtualReward, questData.rewardType)}</span><div><p className="text-xs text-muted-foreground">Recompensa ta</p><p className="mt-1 font-bold">{questData.virtualReward}</p></div><span className="ml-auto text-primary"><Sparkles className="size-5" /></span></div>
                 <div aria-live="polite">{city.accepted ? <div className="flex items-start gap-2 rounded-md bg-primary/10 p-3 text-sm text-primary"><Check className="size-5 shrink-0" /><p><b>Provocare acceptată!</b><br />{questData.virtualReward} e pe insula ta.</p></div> : <Button onClick={() => dispatch({ type: "accept", quest: questData })} disabled={loading || insufficient} className="h-auto min-h-14 w-full whitespace-normal px-4 py-3 text-sm font-bold glow-emerald"><Coins className="size-5" /><span>Acceptă Provocarea<br /><span className="font-medium">(Investește {ron(questData.amountToSave)})</span></span><ChevronRight className="ml-auto" /></Button>}</div>
-                {city.accepted && <Button variant="outline" disabled={loading} className="mt-3 w-full" onClick={() => void loadQuest()}><RefreshCw />{loading ? "Se pregătește…" : "Cere o nouă provocare"}</Button>}
+                {city.accepted && <Button variant="outline" disabled={loading} className="mt-3 w-full" onClick={() => void loadDashboardData()}><RefreshCw />{loading ? "Se pregătește…" : "Cere o nouă provocare"}</Button>}
                 {insufficient && !city.accepted && <p role="alert" className="mt-3 text-sm text-destructive">Sold insuficient pentru această provocare.</p>}
                 <p className="mt-4 flex items-center justify-center gap-1.5 text-xs text-muted-foreground"><ShieldCheck className="size-3" />Acțiune simulată, fără transfer bancar</p>
               </> : <div className="py-8 text-center">
-                {loading ? <p role="status" className="flex items-center justify-center gap-2 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin" />Pregătim misiunea…</p> : <><p role="alert" className="text-sm text-destructive">{apiError || "Misiunea nu este disponibilă."}</p><Button variant="outline" className="mt-4" onClick={() => void loadQuest()}>Încearcă din nou</Button></>}
+                {loading ? <p role="status" className="flex items-center justify-center gap-2 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin" />Pregătim misiunea…</p> : insights?.habit ? <><p role="alert" className="text-sm text-destructive">{apiError || "Misiunea nu este disponibilă."}</p><Button variant="outline" className="mt-4" onClick={() => void loadDashboardData()}>Încearcă din nou</Button></> : <p className="text-sm text-muted-foreground">Importă extrasul pentru a genera prima misiune.</p>}
               </div>}
             </div>
           </section>

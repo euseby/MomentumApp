@@ -7,6 +7,9 @@ Dashboard React/Tailwind la `/` și `/dashboard`, sold inițial 5000 RON, oraș 
 Acest proiect rulează **TanStack Start**, nu Next.js. Fișierele `app/dashboard/page.tsx`, `app/api/oasis/route.js`, `app/login/page.tsx` și middleware-ul NextAuth din document **nu pot fi copiate direct aici**. Contractul HTTP poate fi păstrat, dar echipa trebuie să adapteze backend-ul și autentificarea la TanStack sau să integreze componentele React în proiectul Next.js comun. Nu sunt implementate login, protecție de rute sau endpoint AI în acest frontend.
 
 ## Membrul 2 — AI
+- Importul de extras este în `POST /api/statements/import` (multipart field `file`) și `POST /api/statements/demo`; `/api/insights` întoarce agregatele ultimelor 28 de zile, iar `POST /api/quests/generate` creează un quest din habit-ul calculat în backend.
+- CSV-ul original este procesat în memorie și nu este persistat. Sunt salvate doar data, merchant-ul normalizat, categoria și suma semnată. PDF-ul este best-effort și poate necesita retry cu CSV.
+- În development, clientul API folosește `http://localhost:8000`; configurați `VITE_API_BASE_URL` pentru alt host/origin.
 - Frontend-ul face `POST /api/oasis`, `Content-Type: application/json`, `Accept: application/json`, body `{}`. Extrasul fictiv este definit de backend, nu de frontend.
 - Returnați HTTP 200 cu un obiect JSON direct (nu text markdown și nu `{ data: ... }`):
 ```json

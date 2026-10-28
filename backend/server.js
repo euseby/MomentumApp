@@ -4,7 +4,8 @@ const cors = require("cors");
 const OpenAI = require("openai");
 const { repository } = require("./src/repo");
 const { createCoreRouter } = require("./src/routes/core");
-const { createQuestsRouter, OASIS_BANK_TRANSACTIONS, analyzeDemoHabit } = require("./src/routes/quests");
+const { createQuestsRouter } = require("./src/routes/quests");
+const { createStatementsRouter } = require("./src/routes/statements");
 const llm = require("./src/services/llm");
 const { getCurrentUser } = require("./src/services/current-user");
 const { addLedgerEntry, getWalletBalances } = require("./src/services/ledger");
@@ -35,7 +36,8 @@ function createApp(llmClient = openai, activeRepository = repository) {
     res.json({ status: "ok", service: "Momentum API", model: MODEL_NAME, timestamp: new Date().toISOString() });
   });
   app.use(createCoreRouter(activeRepository, MODEL_NAME, Boolean(llmClient)));
-  app.use(createQuestsRouter(llmClient));
+  app.use(createStatementsRouter(activeRepository));
+  app.use(createQuestsRouter(llmClient, activeRepository));
   return app;
 }
 
@@ -55,7 +57,5 @@ module.exports = {
   getCurrentUser,
   addLedgerEntry,
   getWalletBalances,
-  OASIS_BANK_TRANSACTIONS,
-  analyzeDemoHabit,
   ...llm,
 };
