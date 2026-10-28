@@ -17,16 +17,6 @@ export interface OasisResponse {
 
 export const API_URL = "http://localhost:8000/api/momentum";
 
-export const MOCK_RESPONSE: OasisResponse = {
-  questTitle: "Misiunea de Vineri: Salvatorul de Dopamină",
-  questStory:
-    "Știu că vrei să iei un Bolt spre casă. Dacă iei metroul azi, primești o Casă pe Plajă pe insula ta și banii se duc în portofoliul tău.",
-  amountToSave: 25,
-  virtualReward: "Casă pe Plajă",
-  futureRealValue: 12500,
-  streakBonus: true,
-};
-
 function isValid(d: unknown): d is OasisResponse {
   const o = d as Partial<Record<keyof OasisResponse, unknown>>;
   return (
@@ -40,26 +30,44 @@ function isValid(d: unknown): d is OasisResponse {
   );
 }
 
-export async function fetchMomentum(
-  payload: MomentumRequest,
-): Promise<{ data: OasisResponse; mock: boolean }> {
+export async function fetchMomentum(payload: MomentumRequest): Promise<OasisResponse> {
+  const ctrl = new AbortController();
+  const timeout = setTimeout(() => ctrl.abort(), 20000);
+
   try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 20000);
     const res = await fetch(API_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
       signal: ctrl.signal,
     });
-    clearTimeout(t);
-    if (!res.ok) throw new Error(String(res.status));
-    const data = await res.json();
-    if (!isValid(data)) throw new Error("invalid");
-    return { data, mock: false };
-  } catch {
-    await new Promise((r) => setTimeout(r, 1200));
-    return { data: MOCK_RESPONSE, mock: true };
+    const data: unknown = await res.json().catch(() => null);
+
+    if (!res.ok) {
+      const message =
+        data && typeof data === "object" && "error" in data && typeof data.error === "string"
+          ? data.error
+          : `Backendul a răspuns cu statusul ${res.status}.`;
+      throw new Error(message);
+    }
+
+    if (!isValid(data)) {
+      throw new Error("Backendul a trimis un răspuns care nu respectă contractul Oasis.");
+    }
+
+    return data;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error("Modelul AI nu a răspuns în 20 de secunde. Încearcă din nou.");
+    }
+    if (error instanceof TypeError) {
+      throw new Error(
+        "Nu mă pot conecta la backend. Verifică dacă serverul rulează pe portul 8000.",
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
