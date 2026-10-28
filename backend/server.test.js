@@ -4,9 +4,13 @@ const {
   createApp,
   extractJsonObject,
   normalizeOasisAnalysis,
+  normalizeQuestCopy,
   normalizeQuestResponse,
   OASIS_BANK_TRANSACTIONS,
+  addLedgerEntry,
+  getWalletBalances,
 } = require("./server");
+const { createMemoryRepository } = require("./src/repo");
 
 const requestBody = {
   age: 24,
@@ -36,7 +40,7 @@ async function withServer(app, callback) {
   }
 }
 
-test("POST /api/momentum forwards user data and returns the Oasis contract", async () => {
+test("POST /api/momentum computes money values in code and forwards user data", async () => {
   let completionRequest;
   const app = createApp({
     chat: {
@@ -44,7 +48,7 @@ test("POST /api/momentum forwards user data and returns the Oasis contract", asy
         create: async (request) => {
           completionRequest = request;
           return {
-            choices: [{ message: { content: JSON.stringify(oasisResponse) } }],
+            choices: [{ message: { content: JSON.stringify({ questTitle: "Misiunea de azi", questStory: "Redu puțin obiceiul.", rewardId: "cafenea" }) } }],
           };
         },
       },
@@ -59,8 +63,15 @@ test("POST /api/momentum forwards user data and returns the Oasis contract", asy
     });
 
     assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), oasisResponse);
+  const result = await response.json();
+  assert.equal(result.questTitle, "Misiunea de azi");
+  assert.equal(result.questStory, "Redu puțin obiceiul.");
+  assert.equal(result.amountToSave, 4.4);
+  assert.equal(result.virtualReward, "Cafenea");
+  assert.equal(typeof result.futureRealValue, "number");
+  assert.equal(result.streakBonus, true);
     assert.match(completionRequest.messages[1].content, /Comenzi Tazz/);
+  assert.doesNotMatch(completionRequest.messages[1].content, /400 RON/);
   });
 });
 
@@ -121,14 +132,7 @@ test("normalizes the Oasis response and rejects missing fields", () => {
 });
 
 test("POST /api/oasis sends ten transactions and returns the shared contract", async () => {
-  const analysis = {
-    questTitle: "Operațiunea: Salvatorul de Cafea",
-    analysisMessage: "Ai cumpărat 6 cafele, în total 120 RON.",
-    proposalMessage: "Redu cu două cafele și deblochează o cafenea.",
-    amountToSave: 40,
-    virtualReward: "Cafenea & Pisicuță",
-    rewardType: "building",
-  };
+  const analysis = { questTitle: "Operațiunea: Salvatorul de Cafea", rewardId: "cafenea" };
   let completionRequest;
   const app = createApp({
     chat: {
@@ -144,7 +148,14 @@ test("POST /api/oasis sends ten transactions and returns the shared contract", a
   await withServer(app, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/oasis`, { method: "POST" });
     assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), analysis);
+    assert.deepEqual(await response.json(), {
+      questTitle: analysis.questTitle,
+      analysisMessage: "Am observat 6 cafele săptămâna trecută (120 RON).",
+      proposalMessage: "Ce-ar fi să cumperi doar 4 săptămâna asta? Cei 40 RON economisiți se transformă într-un Cafenea pentru insula ta.",
+      amountToSave: 40,
+      virtualReward: "Cafenea",
+      rewardType: "building",
+    });
     assert.equal(OASIS_BANK_TRANSACTIONS.length, 10);
     assert.equal(
       OASIS_BANK_TRANSACTIONS.filter((transaction) =>
@@ -158,7 +169,18 @@ test("POST /api/oasis sends ten transactions and returns the shared contract", a
         .reduce((sum, transaction) => sum + transaction.amount, 0),
       120,
     );
-    assert.match(completionRequest.messages[1].content, /Salariu/);
+    const llmInput = JSON.parse(completionRequest.messages[1].content);
+    assert.deepEqual(llmInput.habit, {
+      category: "cafea",
+      count: 6,
+      total: 120,
+      avgPrice: 20,
+      periodDays: 7,
+      suggestedReductionPct: 0.33,
+      suggestedCount: 4,
+      weeklySaving: 40,
+    });
+    assert.equal("transactions" in llmInput, false);
   });
 });
 
@@ -173,4 +195,90 @@ test("Oasis contract rejects responses without rewardType", () => {
     }),
     /rewardType/,
   );
+});
+
+test("LLM quest copy cannot inject numeric claims", () => {
+  assert.throws(
+    () => normalizeQuestCopy({ questTitle: "Economisește 40 RON", rewardId: "cafenea" }),
+    /nu poate conține numere/,
+  );
+});
+
+test("GET /api/wallet is scoped to either seeded demo user", async () => {
+  const repo = createMemoryRepository();
+  const app = createApp(null, repo);
+
+  await withServer(app, async (baseUrl) => {
+    for (const userId of ["demo-ioana", "demo-radu"]) {
+      const response = await fetch(`${baseUrl}/api/wallet`, {
+        headers: { "x-demo-user": userId },
+      });
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), {
+        userId,
+        balances: { RON_SIM: 5000, CREDITS: 0 },
+      });
+    }
+  });
+});
+
+test("CORS allows the local frontend origin, credentials, and demo user header", async () => {
+  const app = createApp(null, createMemoryRepository());
+
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/wallet`, {
+      method: "OPTIONS",
+      headers: {
+        Origin: "http://localhost:8080",
+        "Access-Control-Request-Method": "GET",
+        "Access-Control-Request-Headers": "x-demo-user",
+      },
+    });
+
+    assert.equal(response.headers.get("access-control-allow-origin"), "http://localhost:8080");
+    assert.equal(response.headers.get("access-control-allow-credentials"), "true");
+    assert.match(response.headers.get("access-control-allow-headers"), /x-demo-user/i);
+  });
+});
+
+test("ledger is idempotent, sums entries, and never permits a negative balance", async () => {
+  const repo = createMemoryRepository();
+  const entry = {
+    userId: "demo-ioana",
+    currency: "RON_SIM",
+    amount: -125,
+    kind: "test_spend",
+    refType: "test",
+    refId: "quest-1",
+    idempotencyKey: "test:quest-1",
+  };
+
+  const first = await addLedgerEntry(repo, entry);
+  const duplicate = await addLedgerEntry(repo, entry);
+  assert.equal(first.id, duplicate.id);
+  assert.equal(await repo.getBalance("demo-ioana", "RON_SIM"), 4875);
+  assert.deepEqual(await getWalletBalances(repo, "demo-ioana"), {
+    RON_SIM: 4875,
+    CREDITS: 0,
+  });
+  await assert.rejects(
+    addLedgerEntry(repo, { ...entry, amount: -5000, idempotencyKey: "test:overspend" }),
+    (error) => error.code === "INSUFFICIENT_FUNDS",
+  );
+  await assert.rejects(
+    addLedgerEntry(repo, { ...entry, amount: -1 }),
+    (error) => error.code === "IDEMPOTENCY_CONFLICT",
+  );
+});
+
+test("repository records cannot be moved into another user's scope", async () => {
+  const repo = createMemoryRepository();
+  const quest = await repo.createQuest("demo-ioana", {
+    userId: "demo-radu",
+    questTitle: "Ioana's quest",
+  });
+
+  assert.equal(quest.userId, "demo-ioana");
+  assert.equal(await repo.getQuest("demo-radu", quest.id), null);
+  assert.equal((await repo.getQuest("demo-ioana", quest.id)).questTitle, "Ioana's quest");
 });

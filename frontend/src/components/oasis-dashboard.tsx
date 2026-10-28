@@ -2,17 +2,17 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { ArrowDownLeft, ArrowUpRight, Check, ChevronRight, Coffee, Coins, Leaf, LoaderCircle, RefreshCw, ShieldCheck, Sparkles, TriangleAlert, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/components/ui/alert-dialog";
-import { cityReducer, INITIAL_CITY, DEMO_QUEST, fetchOasis, rewardSymbol } from "@/lib/oasis";
+import { cityReducer, INITIAL_CITY, fetchOasis, rewardSymbol, type OasisQuest } from "@/lib/oasis";
 import island from "@/assets/oasis-island.jpg";
 
 const ron = (value: number) => new Intl.NumberFormat("ro-RO", { maximumFractionDigits: 2 }).format(value) + " RON";
 
 export function OasisDashboard() {
   const [city, dispatch] = useReducer(cityReducer, INITIAL_CITY);
-  const [questData, setQuestData] = useState(DEMO_QUEST);
+  const [demoUserId, setDemoUserId] = useState("demo-ioana");
+  const [questData, setQuestData] = useState<OasisQuest | null>(null);
   const [loading, setLoading] = useState(true);
-  const [mock, setMock] = useState(true);
-  const [reason, setReason] = useState("");
+  const [apiError, setApiError] = useState("");
   const [withdrawOpen, setWithdrawOpen] = useState(false);
   const request = useRef<AbortController | null>(null);
   const loadQuest = useCallback(async () => {
@@ -21,24 +21,48 @@ export function OasisDashboard() {
     request.current = controller;
     setLoading(true);
     try {
-      const result = await fetchOasis(controller.signal);
+      const result = await fetchOasis(controller.signal, demoUserId);
       if (controller.signal.aborted) return;
-      setQuestData(result.data); setMock(result.mock); setReason(result.reason || "");
+      setQuestData(result);
+      setApiError("");
       dispatch({ type: "newQuest" });
-    } catch { /* An unmounted or superseded request must not change the dashboard. */ }
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      setQuestData(null);
+      setApiError(error instanceof Error ? error.message : "Nu am putut încărca misiunea.");
+    }
     finally { if (!controller.signal.aborted) setLoading(false); }
-  }, []);
+  }, [demoUserId]);
   useEffect(() => { void loadQuest(); return () => request.current?.abort(); }, [loadQuest]);
   const latestReward = city.rewards.at(-1);
   const cityName = city.isRuined ? "Oraș Abandonat" : city.cityLevel === 1 ? "Cort pe plajă" : latestReward || "Oaza ta";
-  const insufficient = questData.amountToSave > city.simulatedBalance;
+  const insufficient = questData ? questData.amountToSave > city.simulatedBalance : false;
 
   return (
     <div className="min-h-screen bg-background font-sans">
       <header className="border-b border-border">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-5 sm:px-8">
           <div className="flex items-center gap-3"><span className="grid size-10 place-items-center rounded-lg bg-primary/10 text-primary"><Leaf /></span><span className="text-2xl font-extrabold">Oasis<span className="text-primary">.</span></span></div>
-          <div className="flex items-center gap-2 rounded-full border border-border px-3 py-1.5 text-xs text-muted-foreground"><span className="size-1.5 rounded-full bg-neon" />Simulare financiară</div>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {import.meta.env.DEV && (
+              <label className="flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground">
+                <span>Utilizator demo</span>
+                <select
+                  aria-label="Utilizator demo"
+                  className="bg-transparent font-semibold text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  value={demoUserId}
+                  onChange={(event) => {
+                    dispatch({ type: "reset" });
+                    setDemoUserId(event.target.value);
+                  }}
+                >
+                  <option value="demo-ioana">Ioana</option>
+                  <option value="demo-radu">Radu</option>
+                </select>
+              </label>
+            )}
+            <div className="flex items-center gap-2 rounded-full border border-border px-3 py-1.5 text-xs text-muted-foreground"><span className="size-1.5 rounded-full bg-neon" />Simulare financiară</div>
+          </div>
         </div>
       </header>
       <main className="mx-auto max-w-7xl px-5 pb-10 pt-8 sm:px-8">
@@ -58,7 +82,7 @@ export function OasisDashboard() {
               <div className={`relative transition-all duration-700 ${city.isRuined ? "grayscale opacity-40" : ""}`}>
                 <img src={island} width={1536} height={1024} alt="Insulă tropicală cu un cort pe plajă și spațiu pentru un oraș" className="block aspect-[3/2] w-full object-cover" />
                 <div aria-hidden className="city-buildings absolute inset-0">
-                  {city.rewards.slice(-3).map((reward, i) => <span key={`${reward}-${i}`} className={`city-building city-building-${i} animate-pop`}>{rewardSymbol(reward, questData.rewardType)}{reward.toLocaleLowerCase("ro").includes("pisic") && <span className="city-pet">🐈</span>}</span>)}
+                  {city.rewards.slice(-3).map((reward, i) => <span key={`${reward}-${i}`} className={`city-building city-building-${i} animate-pop`}>{rewardSymbol(reward, questData?.rewardType)}{reward.toLocaleLowerCase("ro").includes("pisic") && <span className="city-pet">🐈</span>}</span>)}
                 </div>
               </div>
               <div className="absolute left-4 top-4 rounded-md border border-glass-border bg-background/80 px-3 py-2 text-xs font-semibold backdrop-blur-md">Nivel {city.cityLevel} <span className="mx-2 text-muted-foreground">/</span> {city.isRuined ? "Poveste întreruptă" : "Oaza ta"}</div>
@@ -70,17 +94,20 @@ export function OasisDashboard() {
           <section aria-label="Misiunea AI" className="min-w-0">
             <div className="mb-3 flex items-center justify-between"><h2 className="text-lg font-bold">Provocarea ta</h2><Button variant="ghost" size="icon" aria-label="Actualizează misiunea" title="Actualizează misiunea" disabled={loading} onClick={() => void loadQuest()}><RefreshCw className={loading ? "animate-spin" : ""} /></Button></div>
             <div className="glass rounded-lg p-5 sm:p-6" aria-busy={loading}>
-              <div className="flex items-center justify-between gap-2"><span className="flex items-center gap-2 text-xs font-bold text-neon"><Sparkles className="size-4" />OASIS GAME MASTER</span><span className="rounded-full bg-secondary px-2.5 py-1 text-xs text-muted-foreground">{loading ? "Se conectează…" : mock ? "Demo" : "AI conectat"}</span></div>
-              <h3 className="mt-5 text-2xl font-extrabold leading-snug">{questData.questTitle}</h3>
-              <div className="mt-5 border-l-2 border-neon pl-4"><p className="mb-2 flex items-center gap-2 text-xs font-semibold text-neon"><Coffee className="size-3.5" />CE AM OBSERVAT</p><p className="text-sm leading-relaxed text-muted-foreground">{questData.analysisMessage}</p></div>
-              <p className="mt-5 text-sm leading-relaxed">{questData.proposalMessage}</p>
-              <div className="my-6 flex items-center gap-4 border-y border-border py-4"><span aria-hidden className="text-4xl">{rewardSymbol(questData.virtualReward, questData.rewardType)}</span><div><p className="text-xs text-muted-foreground">Recompensa ta</p><p className="mt-1 font-bold">{questData.virtualReward}</p></div><span className="ml-auto text-primary"><Sparkles className="size-5" /></span></div>
-              <div aria-live="polite">{city.accepted ? <div className="flex items-start gap-2 rounded-md bg-primary/10 p-3 text-sm text-primary"><Check className="size-5 shrink-0" /><p><b>Provocare acceptată!</b><br />{questData.virtualReward} e pe insula ta.</p></div> : <Button onClick={() => dispatch({ type: "accept", quest: questData })} disabled={loading || insufficient} className="h-auto min-h-14 w-full whitespace-normal px-4 py-3 text-sm font-bold glow-emerald"><Coins className="size-5" /><span>Acceptă Provocarea<br /><span className="font-medium">(Investește {ron(questData.amountToSave)})</span></span><ChevronRight className="ml-auto" /></Button>}</div>
-              {city.accepted && <Button variant="outline" disabled={loading} className="mt-3 w-full" onClick={() => void loadQuest()}><RefreshCw />{loading ? "Se pregătește…" : "Cere o nouă provocare"}</Button>}
-              {insufficient && !city.accepted && <p role="alert" className="mt-3 text-sm text-destructive">Sold insuficient pentru această provocare.</p>}
-              <p className="mt-4 flex items-center justify-center gap-1.5 text-xs text-muted-foreground">{loading ? <><LoaderCircle className="size-3 animate-spin" />Pregătim misiunea…</> : <><ShieldCheck className="size-3" />Acțiune simulată, fără transfer bancar</>}</p>
+              <div className="flex items-center justify-between gap-2"><span className="flex items-center gap-2 text-xs font-bold text-neon"><Sparkles className="size-4" />OASIS GAME MASTER</span><span className="rounded-full bg-secondary px-2.5 py-1 text-xs text-muted-foreground">{loading ? "Se conectează…" : questData ? "AI conectat" : "Indisponibil"}</span></div>
+              {questData ? <>
+                <h3 className="mt-5 text-2xl font-extrabold leading-snug">{questData.questTitle}</h3>
+                <div className="mt-5 border-l-2 border-neon pl-4"><p className="mb-2 flex items-center gap-2 text-xs font-semibold text-neon"><Coffee className="size-3.5" />CE AM OBSERVAT</p><p className="text-sm leading-relaxed text-muted-foreground">{questData.analysisMessage}</p></div>
+                <p className="mt-5 text-sm leading-relaxed">{questData.proposalMessage}</p>
+                <div className="my-6 flex items-center gap-4 border-y border-border py-4"><span aria-hidden className="text-4xl">{rewardSymbol(questData.virtualReward, questData.rewardType)}</span><div><p className="text-xs text-muted-foreground">Recompensa ta</p><p className="mt-1 font-bold">{questData.virtualReward}</p></div><span className="ml-auto text-primary"><Sparkles className="size-5" /></span></div>
+                <div aria-live="polite">{city.accepted ? <div className="flex items-start gap-2 rounded-md bg-primary/10 p-3 text-sm text-primary"><Check className="size-5 shrink-0" /><p><b>Provocare acceptată!</b><br />{questData.virtualReward} e pe insula ta.</p></div> : <Button onClick={() => dispatch({ type: "accept", quest: questData })} disabled={loading || insufficient} className="h-auto min-h-14 w-full whitespace-normal px-4 py-3 text-sm font-bold glow-emerald"><Coins className="size-5" /><span>Acceptă Provocarea<br /><span className="font-medium">(Investește {ron(questData.amountToSave)})</span></span><ChevronRight className="ml-auto" /></Button>}</div>
+                {city.accepted && <Button variant="outline" disabled={loading} className="mt-3 w-full" onClick={() => void loadQuest()}><RefreshCw />{loading ? "Se pregătește…" : "Cere o nouă provocare"}</Button>}
+                {insufficient && !city.accepted && <p role="alert" className="mt-3 text-sm text-destructive">Sold insuficient pentru această provocare.</p>}
+                <p className="mt-4 flex items-center justify-center gap-1.5 text-xs text-muted-foreground"><ShieldCheck className="size-3" />Acțiune simulată, fără transfer bancar</p>
+              </> : <div className="py-8 text-center">
+                {loading ? <p role="status" className="flex items-center justify-center gap-2 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin" />Pregătim misiunea…</p> : <><p role="alert" className="text-sm text-destructive">{apiError || "Misiunea nu este disponibilă."}</p><Button variant="outline" className="mt-4" onClick={() => void loadQuest()}>Încearcă din nou</Button></>}
+              </div>}
             </div>
-            {!loading && mock && <p role="status" className="mt-3 flex items-start gap-2 text-xs leading-relaxed text-muted-foreground"><TriangleAlert className="mt-0.5 size-3.5 shrink-0" />{reason}</p>}
           </section>
         </div>
         <footer className="mt-9 flex items-center justify-between border-t border-border pt-5 text-xs text-muted-foreground"><span>Oasis — construiește-ți viitorul.</span><span>Prototip demonstrativ</span></footer>

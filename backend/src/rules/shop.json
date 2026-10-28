@@ -1,0 +1,7 @@
+[
+  { "id": "banana", "name": "Banană", "type": "action", "priceCredits": 40, "sprite": "banana" },
+  { "id": "palmier", "name": "Palmier", "type": "decoration", "priceCredits": 15, "sprite": "palmier" },
+  { "id": "pisica", "name": "Pisică", "type": "character", "priceCredits": 25, "sprite": "pisica" },
+  { "id": "cafenea", "name": "Cafenea", "type": "building", "priceCredits": 60, "sprite": "cafenea" },
+  { "id": "casa-plaja", "name": "Casă pe plajă", "type": "building", "priceCredits": 80, "sprite": "casa-plaja" }
+]

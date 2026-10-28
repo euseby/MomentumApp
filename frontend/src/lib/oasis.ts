@@ -7,7 +7,8 @@ export interface OasisQuest {
   rewardType?: string;
 }
 
-export const OASIS_API_URL = import.meta.env['VITE_OASIS_API_URL'] || "/api/oasis";
+export const OASIS_API_URL = import.meta.env.VITE_OASIS_API_URL ||
+  (import.meta.env.DEV ? "http://localhost:8000/api/oasis" : "/api/oasis");
 export const DEMO_QUEST: OasisQuest = {
   questTitle: "Operațiunea: Salvatorul de Cafea",
   analysisMessage: "Am observat că ai plătit 6 cafele săptămâna trecută (120 RON).",
@@ -26,24 +27,30 @@ export function isOasisQuest(value: unknown): value is OasisQuest {
     && (q['rewardType'] === undefined || typeof q['rewardType'] === "string");
 }
 
-export async function fetchOasis(signal?: AbortSignal): Promise<{ data: OasisQuest; mock: boolean; reason?: string }> {
+export async function fetchOasis(signal?: AbortSignal, demoUserId = "demo-ioana"): Promise<OasisQuest> {
   try {
     const response = await fetch(OASIS_API_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: { "Content-Type": "application/json", Accept: "application/json", "x-demo-user": demoUserId },
       credentials: "include",
       body: JSON.stringify({}),
       signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(12000)]) : AbortSignal.timeout(12000),
     });
-    if (!response.ok) throw new Error(response.status === 401 || response.status === 403 ? "auth" : "server");
-    const data: unknown = await response.json();
+    const data: unknown = await response.json().catch(() => null);
+    if (!response.ok) {
+      const message = data && typeof data === "object" && "error" in data && typeof data.error === "string"
+        ? data.error
+        : `Serverul a răspuns cu statusul ${response.status}.`;
+      throw new Error(message);
+    }
     if (!isOasisQuest(data)) throw new Error("contract");
-    return { data, mock: false };
+    return data;
   } catch (error) {
     if (signal?.aborted) throw error;
-    return { data: DEMO_QUEST, mock: true, reason: error instanceof Error && error.message === "auth"
-      ? "Conexiunea necesită autentificare. Misiunea afișată este demonstrativă."
-      : "Serverul nu este disponibil sau răspunsul nu respectă contractul. Misiunea afișată este demonstrativă." };
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error("Serverul AI nu a răspuns la timp. Încearcă din nou.");
+    }
+    throw error;
   }
 }
 
@@ -58,8 +65,9 @@ export interface CityState {
 export const INITIAL_CITY: CityState = {
   simulatedBalance: 5000, saved: 0, cityLevel: 1, isRuined: false, accepted: false, rewards: [],
 };
-export type CityAction = { type: "accept"; quest: OasisQuest } | { type: "withdraw" } | { type: "newQuest" };
+export type CityAction = { type: "accept"; quest: OasisQuest } | { type: "withdraw" } | { type: "newQuest" } | { type: "reset" };
 export function cityReducer(state: CityState, action: CityAction): CityState {
+  if (action.type === "reset") return INITIAL_CITY;
   if (action.type === "newQuest") return { ...state, accepted: false };
   if (action.type === "withdraw") return {
     ...INITIAL_CITY, simulatedBalance: Math.round((state.simulatedBalance + state.saved) * 100) / 100, isRuined: true,

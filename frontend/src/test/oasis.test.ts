@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cityReducer, INITIAL_CITY, DEMO_QUEST, fetchOasis, isOasisQuest } from "@/lib/oasis";
+import { cityReducer, INITIAL_CITY, DEMO_QUEST, fetchOasis, isOasisQuest, OASIS_API_URL } from "@/lib/oasis";
 
 afterEach(() => vi.unstubAllGlobals());
 describe("Oasis simulation", () => {
@@ -41,13 +41,19 @@ describe("Oasis simulation", () => {
   it("posts to /api/oasis with cookies and consumes the exact response", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(DEMO_QUEST), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
-    expect(await fetchOasis()).toEqual({ data: DEMO_QUEST, mock: false });
-    expect(fetchMock).toHaveBeenCalledWith("/api/oasis", expect.objectContaining({ method: "POST", body: "{}", credentials: "include" }));
+    expect(await fetchOasis()).toEqual(DEMO_QUEST);
+    expect(fetchMock).toHaveBeenCalledWith(OASIS_API_URL, expect.objectContaining({ method: "POST", body: "{}", credentials: "include", headers: expect.objectContaining({ "x-demo-user": "demo-ioana" }) }));
   });
-  it("falls back for network errors and incompatible JSON", async () => {
+  it("sets the selected demo user's header on requests", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(DEMO_QUEST), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await fetchOasis(undefined, "demo-radu");
+    expect(fetchMock).toHaveBeenCalledWith(OASIS_API_URL, expect.objectContaining({ headers: expect.objectContaining({ "x-demo-user": "demo-radu" }) }));
+  });
+  it("surfaces network errors and incompatible JSON instead of returning a fake mission", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
-    expect((await fetchOasis()).mock).toBe(true);
+    await expect(fetchOasis()).rejects.toThrow("offline");
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ questStory: "old contract" }))));
-    expect((await fetchOasis()).data).toEqual(DEMO_QUEST);
+    await expect(fetchOasis()).rejects.toThrow("contract");
   });
 });

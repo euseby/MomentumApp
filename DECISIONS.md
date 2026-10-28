@@ -1,0 +1,1 @@
+2026-10-28: Keep the existing Express + Vite/TanStack architecture in Phase 0; do not migrate to Next.js because the implementation plan says to adapt to the repository and preserve the teammate's frontend.
